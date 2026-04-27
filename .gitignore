@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+venv311/
+.env
+
+# Media Art Artifacts
+wav_archive/
+*.wav
+*.mp3
+
+# Executables & Binaries
+ffmpeg.exe
+vc_redist.x64.exe
+*.exe
+*.dll
+
+# IDEs
+.vscode/
+.idea/
