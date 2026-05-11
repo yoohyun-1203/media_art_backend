@@ -3,6 +3,7 @@ import wave
 import numpy as np
 import time
 import os
+from dotenv import load_dotenv
 from datetime import datetime
 import json
 import warnings
@@ -11,9 +12,16 @@ import warnings
 from pythonosc.udp_client import SimpleUDPClient
 from google import genai
 
-# Gemini API 설정 (발급받은 키를 여기에 입력하세요)
-GEMINI_API_KEY = "AIzaSyA4iZfPhacNfNgaO6SS4NvjrSNPUS4lCnU"
+# -------- API 키 보안 설정 --------
+# .env 파일에 숨겨둔 변수들을 불러옵니다.
+load_dotenv()
 
+# Gemini API 설정 (발급받은 키를 여기에 입력하세요)
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+
+if not GEMINI_API_KEY:
+    print("오류: .env 파일에 GEMINI_API_KEY가 없습니다!")
+    exit(1)
 
 # Suppress warnings
 warnings.filterwarnings("ignore")
