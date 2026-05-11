@@ -7,6 +7,7 @@ from datetime import datetime
 import json
 import warnings
 
+
 from pythonosc.udp_client import SimpleUDPClient
 from google import genai
 
@@ -30,9 +31,19 @@ try:
     import whisper
     from transformers import pipeline
     import librosa
+    import torch # 얘는 맥북 GPU 쓰려고 import 했어용가리
+    import ssl
     
-    # Whisper STT 모델 로드 ('small' 모델로 업그레이드하여 정확도 향상)
-    whisper_model = whisper.load_model("small")
+    # macOS SSL 인증서 우회 (모델 다운로드 에러 방지)
+    ssl._create_default_https_context = ssl._create_unverified_context
+
+    # Mac의 강력한 GPU(Metal Performance Shaders)를 사용하도록 설정
+    device_type = "cpu" 
+    print(f"✅ 사용 중인 하드웨어 가속: {device_type} (안정성 최우선)")
+
+    print("정확도가 높은 medium 모델을 로드합니다...")
+    # medium 모델을 M3 GPU에 로드 (가속 적용)
+    whisper_model = whisper.load_model("medium", device=device_type)
     
     # 생성형 모델 초기화 (속도가 빠른 flash 모델 사용)
     gemini_client = genai.Client(api_key=GEMINI_API_KEY)
@@ -193,8 +204,20 @@ def process_audio(filepath):
     print(f"\n[1/3] 음성 인식(STT) 진행 중... (파일: {filepath})")
     
     try:
+        # --- 👇 여기에 경로를 절대 경로로 바꿔주는 한 줄을 추가하세요! 👇 ---
+        absolute_path = os.path.abspath(filepath)
+        # -------------------------------------------------------------
+
         # 1. Whisper STT (한국어 지정하여 정확도 향상)
-        result = whisper_model.transcribe(filepath, language="ko")
+        #result = whisper_model.transcribe(filepath, language="ko")
+        # 변경: 감정적인 대화나 구어체 위주로 힌트 제공
+        prompt_hint = "안녕? 난 지금 기분이 아주 좋아. 넌 어때? 우울하거나 슬프진 않아? 정말 짜증나고 화가 나. 너무 신기하고 재미있다!"
+        
+        result = whisper_model.transcribe(
+            absolute_path, 
+            language="ko",
+            initial_prompt=prompt_hint
+        )
         transcript = result["text"].strip()
         print(f" -> 인식된 텍스트: {transcript}")
 
