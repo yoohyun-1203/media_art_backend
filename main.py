@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 from datetime import datetime
 import json
 import warnings
-
+import concurrent.futures   # 병렬 처리를 위한 모듈 추가
 
 from pythonosc.udp_client import SimpleUDPClient
 from google import genai
@@ -207,25 +207,61 @@ def find_word_in_grid(word):
                 return r, c
     return -1, -1
 
+def get_gemini_emotion(transcript):
+    """(새로 추가된 함수) Gemini API 호출만 전담합니다."""
+    prompt = f"""
+    다음 문장의 텍스트를 분석하여 사용자의 감정 상태를 파악해줘.
+    1. 아래 100개의 감정 단어 중 텍스트의 문맥(비꼬기, 이모티콘 등 포함)과 가장 잘 어울리는 단어 1개를 선택해.
+    2. 가장 부정적인 상태를 -1.0, 가장 긍정적인 상태를 1.0으로 하는 긍정/부정(Valence) 수치를 평가해.
+    
+    응답은 반드시 '감정단어|수치' 형식으로만 출력해 (부연 설명 절대 금지).
+    예시: 슬픈|-0.6
+    
+    [100개의 감정 단어 목록]
+    격분한, 공황에 빠진, 스트레스 받는, 초조한, 충격받은, 격노한, 몹시 화가 난, 좌절한, 신경이 날카로운, 망연자실한, 
+    화가 치밀어 오른, 겁먹은, 화난, 안절부절못하는, 불안한, 우려하는, 근심하는, 짜증나는, 거슬리는, 불쾌한, 
+    골치 아픈, 염려하는, 마음이 불편한, 언짢은, 놀란, 긍정적인, 흥겨운, 아주 신나는, 황홀한, 들뜬, 
+    쾌활한, 동기 부여된, 영감을 받은, 의기양양한, 기운이 넘치는, 활발한, 흥분한, 낙관적인, 열광하는, 만족스러운, 
+    집중하는, 행복한, 자랑스러운, 짜릿한, 유쾌한, 기쁜, 희망찬, 재미있는, 더없이 행복한, 역겨운, 
+    침울한, 실망스러운, 의욕 없는, 냉담한, 비관적인, 시무룩한, 낙담한, 슬픈, 지루한, 소외된, 
+    비참한, 쓸쓸한, 기죽은, 피곤한, 의기소침한, 우울한, 뚱한, 기진맥진한, 지친, 절망한, 
+    가망 없는, 고독한, 소모된, 진이 빠진, 속 편한, 태평한, 자족하는, 다정한, 충만한, 평온한, 
+    안전한, 감사하는, 감동적인, 여유로운, 차분한, 편안한, 축복받은, 안정적인, 한가로운, 생각에 잠긴, 
+    평화로운, 편한, 근심 걱정 없는, 나른한, 흐뭇한, 고요한, 안락한, 안온한
+    
+    텍스트: "{transcript}"
+    """
+    try:
+        response = gemini_client.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=prompt
+        )
+        response_text = response.text.strip()
+        print(f" -> 제미나이 원본 응답: {response_text}")
+        
+        if "|" in response_text:
+            parts = response_text.split("|")
+            emotion_word = parts[0].strip()
+            valence_str = parts[1].strip()
+            valence = float(''.join(c for c in valence_str if c.isdigit() or c in '.-'))
+        else:
+            emotion_word = "분석 불가"
+            valence = float(''.join(c for c in response_text if c.isdigit() or c in '.-'))
+            
+        return emotion_word, max(min(valence, 1.0), -1.0)
+    except Exception as e:
+        print(f" -> Gemini API 오류: {e}")
+        return "분석 불가", 0.0
+
 def process_audio(filepath):
-    """로컬 모델을 사용하여 STT, Valence, Arousal 분석 후 OSC 전송"""
-    print(f"\n[1/3] 음성 인식(STT) 진행 중... (파일: {filepath})")
+    """병렬 처리(멀티스레딩)가 적용된 초고속 분석 및 OSC 전송"""
+    absolute_path = os.path.abspath(filepath) # 절대 경로 (에러 방지)
+    print(f"\n[1/3] 음성 인식(STT) 진행 중... (파일: {absolute_path})")
     
     try:
-        # --- 👇 여기에 경로를 절대 경로로 바꿔주는 한 줄을 추가하세요! 👇 ---
-        absolute_path = os.path.abspath(filepath)
-        # -------------------------------------------------------------
-
-        # 1. Whisper STT (한국어 지정하여 정확도 향상)
-        #result = whisper_model.transcribe(filepath, language="ko")
-        # 변경: 감정적인 대화나 구어체 위주로 힌트 제공
+        # 1. Whisper STT (이건 오디오를 텍스트로 바꿔야 하니 먼저 실행)
         prompt_hint = "안녕? 난 지금 기분이 아주 좋아. 넌 어때? 우울하거나 슬프진 않아? 정말 짜증나고 화가 나. 너무 신기하고 재미있다!"
-        
-        result = whisper_model.transcribe(
-            absolute_path, 
-            language="ko",
-            initial_prompt=prompt_hint
-        )
+        result = whisper_model.transcribe(absolute_path, language="ko", initial_prompt=prompt_hint)
         transcript = result["text"].strip()
         print(f" -> 인식된 텍스트: {transcript}")
 
@@ -233,79 +269,37 @@ def process_audio(filepath):
             print("인식된 텍스트가 없어 분석을 건너뜁니다.")
             return False
 
-        # 2. 텍스트 기반 감정 단어 분류 및 Valence 분석 (Gemini API 사용)
-        print("[2/3] Gemini API 기반 무드 미터(100개 감정) 분류 및 Valence 분석 중...")
+        print("[2/3 & 3/3] Gemini 감정 분석과 오디오 어투 분석을 ⚡동시에⚡ 진행합니다...")
         
-        prompt = f"""
-        다음 문장의 텍스트를 분석하여 사용자의 감정 상태를 파악해줘.
-        1. 아래 100개의 감정 단어 중 텍스트의 문맥(비꼬기, 이모티콘 등 포함)과 가장 잘 어울리는 단어 1개를 선택해.
-        2. 가장 부정적인 상태를 -1.0, 가장 긍정적인 상태를 1.0으로 하는 긍정/부정(Valence) 수치를 평가해.
-        
-        응답은 반드시 '감정단어|수치' 형식으로만 출력해 (부연 설명 절대 금지).
-        예시: 슬픈|-0.6
-        
-        [100개의 감정 단어 목록]
-        격분한, 공황에 빠진, 스트레스 받는, 초조한, 충격받은, 격노한, 몹시 화가 난, 좌절한, 신경이 날카로운, 망연자실한, 
-        화가 치밀어 오른, 겁먹은, 화난, 안절부절못하는, 불안한, 우려하는, 근심하는, 짜증나는, 거슬리는, 불쾌한, 
-        골치 아픈, 염려하는, 마음이 불편한, 언짢은, 놀란, 긍정적인, 흥겨운, 아주 신나는, 황홀한, 들뜬, 
-        쾌활한, 동기 부여된, 영감을 받은, 의기양양한, 기운이 넘치는, 활발한, 흥분한, 낙관적인, 열광하는, 만족스러운, 
-        집중하는, 행복한, 자랑스러운, 짜릿한, 유쾌한, 기쁜, 희망찬, 재미있는, 더없이 행복한, 역겨운, 
-        침울한, 실망스러운, 의욕 없는, 냉담한, 비관적인, 시무룩한, 낙담한, 슬픈, 지루한, 소외된, 
-        비참한, 쓸쓸한, 기죽은, 피곤한, 의기소침한, 우울한, 뚱한, 기진맥진한, 지친, 절망한, 
-        가망 없는, 고독한, 소모된, 진이 빠진, 속 편한, 태평한, 자족하는, 다정한, 충만한, 평온한, 
-        안전한, 감사하는, 감동적인, 여유로운, 차분한, 편안한, 축복받은, 안정적인, 한가로운, 생각에 잠긴, 
-        평화로운, 편한, 근심 걱정 없는, 나른한, 흐뭇한, 고요한, 안락한, 안온한
-        
-        텍스트: "{transcript}"
-        """
-        
-        emotion_word = "분석 불가"
-        valence = 0.0
-        
-        try:
-            response = gemini_client.models.generate_content(
-                model='gemini-2.5-flash',
-                contents=prompt
-            )
-            response_text = response.text.strip()
-            print(f" -> 제미나이 원본 응답: {response_text}")
+        # 2 & 3. 병렬 처리 (멀티스레딩) 시작!
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            # 두 작업을 동시에 던집니다
+            future_gemini = executor.submit(get_gemini_emotion, transcript)
+            future_arousal = executor.submit(analyze_arousal, absolute_path)
             
-            if "|" in response_text:
-                parts = response_text.split("|")
-                emotion_word = parts[0].strip()
-                valence_str = parts[1].strip()
-                valence = float(''.join(c for c in valence_str if c.isdigit() or c in '.-'))
-            else:
-                valence = float(''.join(c for c in response_text if c.isdigit() or c in '.-'))
-                
-            valence = max(min(valence, 1.0), -1.0)
-        except Exception as e:
-            print(f" -> Gemini API 오류 또는 파싱 실패 (기본값 적용): {e}")
+            # 두 작업이 모두 끝날 때까지 기다렸다가 결과값을 받습니다
+            emotion_word, valence = future_gemini.result()
+            audio_arousal = future_arousal.result()
 
-        # 3. 음향 기반 Arousal 분석 (참고용)
-        print("[3/3] 오디오 기반 어투/흥분도(Arousal) 분석 중...")
-        audio_arousal = analyze_arousal(filepath)
-
-        # 4. 무드 미터 그리드에서 정확한 사분면 및 색상 찾기
+        # 4. 무드 미터 그리드에서 색상 찾기
         row, col = find_word_in_grid(emotion_word)
         
         if row != -1 and col != -1:
-            # 사분면에 따라 터치디자이너가 보라색 등 섞인 색을 내지 않도록 극단값(스냅) 부여
             if col < 5 and row < 5:
-                color_name = "빨강 (Red)"
-                td_valence, td_arousal = -0.7, 0.7
+                color_name, td_valence, td_arousal = "빨강 (Red)", -0.7, 0.7
             elif col >= 5 and row < 5:
-                color_name = "노랑 (Yellow)"
-                td_valence, td_arousal = 0.7, 0.7
+                color_name, td_valence, td_arousal = "노랑 (Yellow)", 0.7, 0.7
             elif col < 5 and row >= 5:
-                color_name = "파랑 (Blue)"
-                td_valence, td_arousal = -0.7, -0.7
+                color_name, td_valence, td_arousal = "파랑 (Blue)", -0.7, -0.7
             else:
-                color_name = "초록 (Green)"
-                td_valence, td_arousal = 0.7, -0.7
+                color_name, td_valence, td_arousal = "초록 (Green)", 0.7, -0.7
         else:
-            color_name = "알 수 없음"
-            td_valence, td_arousal = valence, audio_arousal
+            # API 실패 시 Fallback
+            if audio_arousal > 0:
+                color_name, td_valence = "노랑 (Yellow) - 로컬대체", 0.5
+            else:
+                color_name, td_valence = "파랑 (Blue) - 로컬대체", -0.5
+            td_arousal = audio_arousal
 
         # 결과 요약 출력
         print(f"\n==================================================")
@@ -315,7 +309,7 @@ def process_audio(filepath):
         print(f"==================================================")
 
         # 5. OSC 전송
-        print(f"\n>> OSC 데이터 전송 (포트 5000) - 단어: {emotion_word}, 색상: {color_name}")
+        print(f">> OSC 데이터 전송 (포트 5000)")
         osc_client.send_message("/emotion/word", emotion_word)
         osc_client.send_message("/emotion/color_name", color_name)
         osc_client.send_message("/emotion/valence", float(td_valence))
