@@ -66,7 +66,7 @@ CHANNELS = 1
 RATE = 16000
 CHUNK = 1024
 THRESHOLD = 400  # RMS 임계값 (사람 목소리가 보통 100~300 내외이므로 하향 조정)
-SILENCE_LIMIT = 0.7  # 초 (이 시간 동안 조용하면 녹음 종료)
+SILENCE_LIMIT = 0.5  # 초 (이 시간 동안 조용하면 녹음 종료)
 
 # 폴더 설정
 ARCHIVE_DIR = "wav_archive"
