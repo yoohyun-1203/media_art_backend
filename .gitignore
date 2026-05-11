@@ -4,12 +4,16 @@ __pycache__/
 *$py.class
 venv/
 venv311/
+.venv/
 .env
 
 # Media Art Artifacts
 wav_archive/
 *.wav
 *.mp3
+
+# macOS (맥북 시스템 파일)
+.DS_Store
 
 # Executables & Binaries
 ffmpeg.exe
@@ -19,4 +23,4 @@ vc_redist.x64.exe
 
 # IDEs
 .vscode/
-.idea/
+.idea
