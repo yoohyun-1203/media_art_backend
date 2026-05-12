@@ -198,8 +198,8 @@ def find_word_in_grid(word):
                 return r, c
     return -1, -1
 
-def get_gemini_emotion(transcript):
-    """(새로 추가된 함수) Gemini API 호출만 전담합니다."""
+def get_ai_emotion(transcript):
+    """(Gemini 대체) OpenAI API(gpt-4o-mini)를 사용하여 초고속 감정 분석 수행"""
     prompt = f"""
     다음 문장의 텍스트를 분석하여 사용자의 감정 상태를 파악해줘.
     1. 아래 100개의 감정 단어 중 텍스트의 문맥(비꼬기, 이모티콘 등 포함)과 가장 잘 어울리는 단어 1개를 선택해.
@@ -223,12 +223,17 @@ def get_gemini_emotion(transcript):
     텍스트: "{transcript}"
     """
     try:
-        response = gemini_client.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=prompt
+        start_time = time.time()
+        response = openai_client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=15,
+            temperature=0.3
         )
-        response_text = response.text.strip()
-        print(f" -> 제미나이 원본 응답: {response_text}")
+        elapsed_time = time.time() - start_time
+        response_text = response.choices[0].message.content.strip()
+        print(f" -> ⏱️ AI 감정 분석 소요 시간: {elapsed_time:.2f}초")
+        print(f" -> AI 원본 응답: {response_text}")
         
         if "|" in response_text:
             parts = response_text.split("|")
@@ -241,7 +246,7 @@ def get_gemini_emotion(transcript):
             
         return emotion_word, max(min(valence, 1.0), -1.0)
     except Exception as e:
-        print(f" -> Gemini API 오류: {e}")
+        print(f" -> AI API 오류: {e}")
         return "분석 불가", 0.0
 
 def process_audio(filepath):
@@ -267,16 +272,16 @@ def process_audio(filepath):
             print("인식된 텍스트가 없어 분석을 건너뜁니다.")
             return False
 
-        print("[2/3 & 3/3] Gemini 감정 분석과 오디오 어투 분석을 ⚡동시에⚡ 진행합니다...")
+        print("[2/3 & 3/3] AI 감정 분석과 오디오 어투 분석을 ⚡동시에⚡ 진행합니다...")
         
         # 2 & 3. 병렬 처리 (멀티스레딩) 시작!
         with concurrent.futures.ThreadPoolExecutor() as executor:
             # 두 작업을 동시에 던집니다
-            future_gemini = executor.submit(get_gemini_emotion, transcript)
+            future_ai = executor.submit(get_ai_emotion, transcript)
             future_arousal = executor.submit(analyze_arousal, absolute_path)
             
             # 두 작업이 모두 끝날 때까지 기다렸다가 결과값을 받습니다
-            emotion_word, valence = future_gemini.result()
+            emotion_word, valence = future_ai.result()
             audio_arousal = future_arousal.result()
 
         # 4. 무드 미터 그리드에서 색상 찾기
@@ -339,25 +344,76 @@ def manage_archive_limit(archive_dir, max_files=20):
 
 def main():
     print("=== 미디어아트 100% 로컬 백엔드 시스템 시작 ===")
+    
+    # 텍스트 테스트 모드 추가
+    test_mode_input = input("지금 소리를 내기 힘든 환경이신가요? 텍스트 모드로 테스트할까요? (y/n): ").strip().lower()
+    is_text_mode = (test_mode_input == 'y')
+    
+    if is_text_mode:
+        print("\n[텍스트 모드 활성화] 마이크 대신 키보드로 감정을 입력합니다.")
+    else:
+        print("\n[마이크 모드 활성화] 소리를 내면 녹음이 시작됩니다.")
+
     try:
         while True:
-            # 1. 소리 감지 및 녹음
-            filepath = record_audio()
-            
-            # 2. 녹음 파일이 있으면 분석 및 OSC 전송
-            if filepath:
-                success = process_audio(filepath)
-                if success:
-                    # 분석이 완료된 경우에만 최대 20개 유지 규칙 적용
-                    manage_archive_limit(ARCHIVE_DIR, max_files=20)
+            if is_text_mode:
+                text = input("\n[텍스트 모드] 분석할 문장을 입력하세요 (종료하려면 'q' 입력): ")
+                if text.lower() == 'q':
+                    break
+                
+                print(f"\n[1/3] 음성 인식(STT) 건너뜀 (입력된 텍스트: {text})")
+                print("[2/3] AI 감정 분석 중...")
+                
+                emotion_word, valence = get_ai_emotion(text)
+                audio_arousal = 0.0 # 텍스트 모드이므로 어투는 기본값
+                
+                # 4. 무드 미터 그리드에서 색상 찾기
+                row, col = find_word_in_grid(emotion_word)
+                
+                if row != -1 and col != -1:
+                    if col < 5 and row < 5:
+                        color_name, td_valence, td_arousal = "빨강 (Red)", -0.7, 0.7
+                    elif col >= 5 and row < 5:
+                        color_name, td_valence, td_arousal = "노랑 (Yellow)", 0.7, 0.7
+                    elif col < 5 and row >= 5:
+                        color_name, td_valence, td_arousal = "파랑 (Blue)", -0.7, -0.7
+                    else:
+                        color_name, td_valence, td_arousal = "초록 (Green)", 0.7, -0.7
                 else:
-                    # 텍스트가 없거나 에러가 난 경우 해당 파일은 삭제
-                    try:
-                        if os.path.exists(filepath):
-                            os.remove(filepath)
-                            print(f"[알림] 의미 없는 소리이므로 저장하지 않고 삭제했습니다: {filepath}\n")
-                    except OSError:
-                        pass
+                    color_name, td_valence, td_arousal = "기본값 (파랑)", -0.5, 0.0
+
+                print(f"\n==================================================")
+                print(f"🗣️ 입력된 텍스트: {text}")
+                print(f"🤖 최종 감정단어: {emotion_word} -> 🎨 매핑 색상: {color_name}")
+                print(f"📊 터치디자이너 전송 수치 - Valence: {td_valence}, Arousal: {td_arousal}")
+                print(f"==================================================")
+
+                print(f">> OSC 데이터 전송 (포트 5000)")
+                osc_client.send_message("/emotion/word", emotion_word)
+                osc_client.send_message("/emotion/color_name", color_name)
+                osc_client.send_message("/emotion/valence", float(td_valence))
+                osc_client.send_message("/emotion/arousal", float(td_arousal))
+                osc_client.send_message("/emotion/text", text)
+                print("전송 완료!")
+                
+            else:
+                # 1. 소리 감지 및 녹음
+                filepath = record_audio()
+                
+                # 2. 녹음 파일이 있으면 분석 및 OSC 전송
+                if filepath:
+                    success = process_audio(filepath)
+                    if success:
+                        # 분석이 완료된 경우에만 최대 20개 유지 규칙 적용
+                        manage_archive_limit(ARCHIVE_DIR, max_files=20)
+                    else:
+                        # 텍스트가 없거나 에러가 난 경우 해당 파일은 삭제
+                        try:
+                            if os.path.exists(filepath):
+                                os.remove(filepath)
+                                print(f"[알림] 의미 없는 소리이므로 저장하지 않고 삭제했습니다: {filepath}\n")
+                        except OSError:
+                            pass
     except KeyboardInterrupt:
         print("\n프로그램을 종료합니다.")
 
