@@ -8,9 +8,11 @@ from datetime import datetime
 import json
 import warnings
 import concurrent.futures   # 병렬 처리를 위한 모듈 추가
+import librosa
 
 from pythonosc.udp_client import SimpleUDPClient
 from google import genai
+from openai import OpenAI
 
 # -------- API 키 보안 설정 --------
 # .env 파일에 숨겨둔 변수들을 불러옵니다.
@@ -33,31 +35,20 @@ if sys.platform == "win32":
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', line_buffering=True)
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', line_buffering=True)
 
-# 1. 로컬 AI 모델 로드 (초기 실행 시 다운로드 필요)
-print("로컬 AI 모델을 로드하는 중입니다. (약간의 시간이 소요될 수 있습니다)")
+# 1. 클라우드 AI 모델 초기화 (API 방식 - 1초 컷 세팅)
+print("⚡ 초고속 클라우드 AI(OpenAI + Gemini)를 초기화합니다...")
 try:
-    import whisper
-    from transformers import pipeline
-    import librosa
-    import torch # 얘는 맥북 GPU 쓰려고 import 했어용가리
-    import ssl
+    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+    if not OPENAI_API_KEY:
+        print("오류: .env 파일에 OPENAI_API_KEY가 없습니다!")
+        exit(1)
     
-    # macOS SSL 인증서 우회 (모델 다운로드 에러 방지)
-    ssl._create_default_https_context = ssl._create_unverified_context
-
-    # Mac의 강력한 GPU(Metal Performance Shaders)를 사용하도록 설정
-    device_type = "cpu" 
-    print(f"✅ 사용 중인 하드웨어 가속: {device_type} (안정성 최우선)")
-
-    print("정확도가 높은 medium 모델을 로드합니다...")
-    # medium 모델을 M3 GPU에 로드 (가속 적용)
-    whisper_model = whisper.load_model("medium", device=device_type)
-    
-    # 생성형 모델 초기화 (속도가 빠른 flash 모델 사용)
+    # 생성형 모델 및 Whisper API 초기화 (다운로드 없음!)
     gemini_client = genai.Client(api_key=GEMINI_API_KEY)
-    print("AI 모델 로드 완료!")
+    openai_client = OpenAI(api_key=OPENAI_API_KEY)
+    print("✅ AI 클라이언트 세팅 완료!")
 except Exception as e:
-    print(f"모델 로드 중 오류 발생: {e}")
+    print(f"API 세팅 중 오류 발생: {e}")
     exit(1)
 
 # 오디오 설정
@@ -261,9 +252,16 @@ def process_audio(filepath):
     try:
         # 1. Whisper STT (이건 오디오를 텍스트로 바꿔야 하니 먼저 실행)
         prompt_hint = "안녕? 난 지금 기분이 아주 좋아. 넌 어때? 우울하거나 슬프진 않아? 정말 짜증나고 화가 나. 너무 신기하고 재미있다!"
-        result = whisper_model.transcribe(absolute_path, language="ko", initial_prompt=prompt_hint)
-        transcript = result["text"].strip()
+        with open(absolute_path, "rb") as audio_file:
+            transcript = openai_client.audio.transcriptions.create(
+                model="whisper-1", 
+                file=audio_file,
+                language="ko",
+                prompt=prompt_hint
+            ).text.strip()
+            
         print(f" -> 인식된 텍스트: {transcript}")
+
 
         if not transcript:
             print("인식된 텍스트가 없어 분석을 건너뜁니다.")
