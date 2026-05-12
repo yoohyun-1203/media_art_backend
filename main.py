@@ -198,56 +198,48 @@ def find_word_in_grid(word):
                 return r, c
     return -1, -1
 
-def get_ai_emotion(transcript):
-    """(Gemini 대체) OpenAI API(gpt-4o-mini)를 사용하여 초고속 감정 분석 수행"""
-    prompt = f"""
-    다음 문장의 텍스트를 분석하여 사용자의 감정 상태를 파악해줘.
-    1. 아래 100개의 감정 단어 중 텍스트의 문맥(비꼬기, 이모티콘 등 포함)과 가장 잘 어울리는 단어 1개를 선택해.
-    2. 가장 부정적인 상태를 -1.0, 가장 긍정적인 상태를 1.0으로 하는 긍정/부정(Valence) 수치를 평가해.
+# 모듈 최상단이나 초기화 부분에 로컬 파이프라인 추가
+try:
+    from transformers import pipeline
+    print("⚡ 0.1초 컷! 로컬 감성 분석 AI를 로드합니다...")
+    # 다국어(한국어 지원) 리뷰 감성 분석 모델 (1점~5점)
+    sentiment_model = pipeline(model="nlptown/bert-base-multilingual-uncased-sentiment")
+    print("✅ 로컬 감성 AI 로드 완료!")
+except Exception as e:
+    print(f"로컬 감성 AI 로드 실패 (API로 대체 불가능): {e}")
+    sentiment_model = None
+
+def get_ai_emotion(transcript, arousal=0.0):
+    """외부 API 통신을 완전히 없애고 로컬 AI로 0.1초만에 감정과 수치를 뽑아냅니다."""
+    start_time = time.time()
     
-    응답은 반드시 '감정단어|수치' 형식으로만 출력해 (부연 설명 절대 금지).
-    예시: 슬픈|-0.6
-    
-    [100개의 감정 단어 목록]
-    격분한, 공황에 빠진, 스트레스 받는, 초조한, 충격받은, 격노한, 몹시 화가 난, 좌절한, 신경이 날카로운, 망연자실한, 
-    화가 치밀어 오른, 겁먹은, 화난, 안절부절못하는, 불안한, 우려하는, 근심하는, 짜증나는, 거슬리는, 불쾌한, 
-    골치 아픈, 염려하는, 마음이 불편한, 언짢은, 놀란, 긍정적인, 흥겨운, 아주 신나는, 황홀한, 들뜬, 
-    쾌활한, 동기 부여된, 영감을 받은, 의기양양한, 기운이 넘치는, 활발한, 흥분한, 낙관적인, 열광하는, 만족스러운, 
-    집중하는, 행복한, 자랑스러운, 짜릿한, 유쾌한, 기쁜, 희망찬, 재미있는, 더없이 행복한, 역겨운, 
-    침울한, 실망스러운, 의욕 없는, 냉담한, 비관적인, 시무룩한, 낙담한, 슬픈, 지루한, 소외된, 
-    비참한, 쓸쓸한, 기죽은, 피곤한, 의기소침한, 우울한, 뚱한, 기진맥진한, 지친, 절망한, 
-    가망 없는, 고독한, 소모된, 진이 빠진, 속 편한, 태평한, 자족하는, 다정한, 충만한, 평온한, 
-    안전한, 감사하는, 감동적인, 여유로운, 차분한, 편안한, 축복받은, 안정적인, 한가로운, 생각에 잠긴, 
-    평화로운, 편한, 근심 걱정 없는, 나른한, 흐뭇한, 고요한, 안락한, 안온한
-    
-    텍스트: "{transcript}"
-    """
-    try:
-        start_time = time.time()
-        response = openai_client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=15,
-            temperature=0.3
-        )
-        elapsed_time = time.time() - start_time
-        response_text = response.choices[0].message.content.strip()
-        print(f" -> ⏱️ AI 감정 분석 소요 시간: {elapsed_time:.2f}초")
-        print(f" -> AI 원본 응답: {response_text}")
-        
-        if "|" in response_text:
-            parts = response_text.split("|")
-            emotion_word = parts[0].strip()
-            valence_str = parts[1].strip()
-            valence = float(''.join(c for c in valence_str if c.isdigit() or c in '.-'))
-        else:
-            emotion_word = "분석 불가"
-            valence = float(''.join(c for c in response_text if c.isdigit() or c in '.-'))
+    valence = 0.0
+    if sentiment_model:
+        try:
+            # 로컬 모델 예측: 예) [{'label': '5 stars', 'score': 0.8}]
+            result = sentiment_model(transcript)[0]
+            stars = int(result['label'].split()[0])
             
-        return emotion_word, max(min(valence, 1.0), -1.0)
-    except Exception as e:
-        print(f" -> AI API 오류: {e}")
-        return "분석 불가", 0.0
+            # 1점 -> -1.0 (부정), 3점 -> 0.0 (중립), 5점 -> 1.0 (긍정)
+            valence = (stars - 3) / 2.0
+            
+            # 확률값(score)을 반영하여 세밀도 추가 (확률이 낮으면 0에 가깝게)
+            valence = valence * result['score']
+        except Exception as e:
+            print(f" -> 로컬 AI 분석 오류: {e}")
+    
+    # 🌟 핵심: Valence(긍정/부정)와 Arousal(흥분도) 2개의 수치만으로 100개 단어 맵에서 즉시 1개를 매핑!
+    # API가 단어를 고르게 하는 대신, 수치를 기반으로 O(1) 속도로 좌표를 찾습니다.
+    # row: Arousal (-1.0 ~ 1.0) -> 9 ~ 0
+    # col: Valence (-1.0 ~ 1.0) -> 0 ~ 9
+    row = int(max(min((1.0 - arousal) / 2.0 * 9.99, 9.0), 0.0))
+    col = int(max(min((valence + 1.0) / 2.0 * 9.99, 9.0), 0.0))
+    emotion_word = MOOD_METER_GRID[row][col]
+
+    elapsed_time = time.time() - start_time
+    print(f" -> ⏱️ 로컬 AI 감정 분석 소요 시간: {elapsed_time:.3f}초 (Valence: {valence:.2f})")
+    
+    return emotion_word, max(min(valence, 1.0), -1.0)
 
 def process_audio(filepath):
     """병렬 처리(멀티스레딩)가 적용된 초고속 분석 및 OSC 전송"""
@@ -272,17 +264,11 @@ def process_audio(filepath):
             print("인식된 텍스트가 없어 분석을 건너뜁니다.")
             return False
 
-        print("[2/3 & 3/3] AI 감정 분석과 오디오 어투 분석을 ⚡동시에⚡ 진행합니다...")
+        print("[2/3 & 3/3] AI 감정 분석과 오디오 어투 분석을 ⚡0.1초만에⚡ 진행합니다...")
         
-        # 2 & 3. 병렬 처리 (멀티스레딩) 시작!
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            # 두 작업을 동시에 던집니다
-            future_ai = executor.submit(get_ai_emotion, transcript)
-            future_arousal = executor.submit(analyze_arousal, absolute_path)
-            
-            # 두 작업이 모두 끝날 때까지 기다렸다가 결과값을 받습니다
-            emotion_word, valence = future_ai.result()
-            audio_arousal = future_arousal.result()
+        # 2 & 3. 0.1초 내외로 완료되므로 순차 실행 (API 통신 없음)
+        audio_arousal = analyze_arousal(absolute_path)
+        emotion_word, valence = get_ai_emotion(transcript, arousal=audio_arousal)
 
         # 4. 무드 미터 그리드에서 색상 찾기
         row, col = find_word_in_grid(emotion_word)
