@@ -21,6 +21,10 @@
   - 테스트에서는 `MEDIA_ART_LOAD_DOTENV=0`으로 dotenv load를 끌 수 있습니다.
 - `web/serial_visualizer.html`, `web/serial_visualizer.js`
   - Arduino protocol `v,<valence>,<arousal>`를 브라우저에서 시각화하고 Web Serial로 테스트합니다.
+- `e2e_performance.py`
+  - labeled WAV 파일을 chunk 단위로 재생해 backend live signal, 가상 Arduino payload, latency/throughput/accuracy summary를 기록합니다.
+- `web/arduino_simulator.html`, `web/arduino_simulator.js`
+  - 실제 Arduino 없이 `v,<valence>,<arousal>` payload가 LED에 어떻게 반영되는지 확인합니다.
 
 ## 설치
 
@@ -62,7 +66,63 @@ Serial visualizer:
 http://127.0.0.1:8765/serial_visualizer.html
 ```
 
+Arduino simulator:
+
+```text
+http://127.0.0.1:8765/arduino_simulator.html
+```
+
 Arduino Web Serial tester는 Chromium 계열 브라우저에서 사용합니다.
+
+## E2E 성능 테스트
+
+가장 빠른 smoke test는 synthetic WAV를 생성해서 API 없이 live-only 경로만 측정합니다.
+
+```powershell
+.\venv311\Scripts\python.exe e2e_performance.py --synthetic --output-dir logs\e2e --max-samples 3 --web-latest
+```
+
+이 명령은 다음을 확인합니다.
+
+- audio chunk 입력부터 `arousal_live` 계산까지 평균 처리 시간
+- 첫 의미 있는 arousal response가 나타난 audio timeline 기준 ms
+- 가상 Arduino payload `v,<valence>,<arousal>` 생성률
+- label 기반 arousal high/low 방향성 정확도
+
+실제 감정 label 정확도를 보려면 labeled speech emotion dataset을 내려받아 실행합니다.
+
+```powershell
+.\venv311\Scripts\python.exe e2e_performance.py --dataset-dir "D:\datasets\CREMA-D\AudioWAV" --output-dir logs\e2e --max-samples 20
+```
+
+또는 CSV manifest를 사용할 수 있습니다.
+
+```csv
+path,label,dataset
+AudioWAV/1001_DFA_HAP_XX.wav,happy,crema-d
+AudioWAV/1001_DFA_SAD_XX.wav,sad,crema-d
+```
+
+```powershell
+.\venv311\Scripts\python.exe e2e_performance.py --manifest ".\bench_manifest.csv" --output-dir logs\e2e
+```
+
+`--full-ai`를 붙이면 각 WAV를 기존 Whisper/Gemini 분석 경로까지 통과시켜 `emotion_accuracy`를 계산합니다. 이 모드는 API key, 네트워크, 비용, 외부 API latency의 영향을 받습니다.
+
+```powershell
+.\venv311\Scripts\python.exe e2e_performance.py --dataset-dir "D:\datasets\CREMA-D\AudioWAV" --max-samples 10 --full-ai
+```
+
+무료로 사용할 수 있는 labeled 음성 후보:
+
+- [CREMA-D](https://github.com/CheyneyComputerScience/CREMA-D): 7,442개 emotional multimodal clip, `AudioWAV` 파일명에 emotion code가 들어 있습니다. repo 설명 기준 ODbL/DBCL license입니다.
+- [RAVDESS](https://smartlaboratory.org/resources/speech-song-database-ravdess/): speech/song emotion dataset입니다. 비상업 연구용 성격이 강한 CC BY-NC-SA 4.0 license이므로 상업/공개 배포에는 주의합니다.
+
+정확도 해석 caveat:
+
+- 기본 `live-only` 모드는 진짜 감정 분류 모델이 아니라 즉시 반응성 측정입니다. 이때 `emotion_accuracy`는 `unavailable`로 남고, `arousal_direction_accuracy`만 봅니다.
+- `LocalSerFallback`은 실제 SER 모델이 아닙니다. 감정 정확도 숫자는 `--full-ai`나 향후 실제 SER adapter가 붙은 뒤에 의미가 커집니다.
+- 참여자가 체감하는 실시간성은 `first_response_ms_avg`, `processing_ms_avg`, `payload_rate_hz_avg`, `wall_realtime_ratio_avg`를 함께 봅니다.
 
 ## OSC live channels
 
@@ -145,13 +205,14 @@ backend cwd에서 실행합니다.
 .\venv311\Scripts\python.exe -m py_compile main.py web_app.py live_signal.py local_ser.py ambient_emotion.py
 node --check web\app.js
 node --check web\serial_visualizer.js
+node --check web\arduino_simulator.js
 ```
 
 최신 확인 결과:
 
 ```text
 .\venv311\Scripts\python.exe -m unittest discover -s tests -v
-Ran 35 tests ... OK
+Ran 41 tests ... OK
 
 .\venv311\Scripts\python.exe -m py_compile main.py web_app.py live_signal.py local_ser.py ambient_emotion.py
 OK / no output
@@ -160,6 +221,9 @@ node --check web\app.js
 OK / no output
 
 node --check web\serial_visualizer.js
+OK / no output
+
+node --check web\arduino_simulator.js
 OK / no output
 ```
 

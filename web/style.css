@@ -33,7 +33,8 @@ button {
   cursor: pointer;
 }
 
-button:hover {
+button:hover,
+.button-link:hover {
   background: var(--accent-dark);
 }
 
@@ -43,6 +44,23 @@ button:disabled {
 }
 
 button.secondary {
+  background: #2d3541;
+}
+
+.button-link {
+  min-height: 42px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  padding: 0 16px;
+  background: var(--accent);
+  color: #fff;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.button-link.secondary {
   background: #2d3541;
 }
 
@@ -230,6 +248,40 @@ body[data-live-status="listening"] #liveStatusText {
   margin: 12px 0 0;
   color: var(--muted);
   line-height: 1.5;
+}
+
+.payload-input {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 12px;
+  resize: vertical;
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 16px;
+}
+
+.local-actions {
+  justify-content: start;
+  margin-top: 12px;
+}
+
+.poll-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.poll-toggle input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--accent);
+}
+
+.simulator-status {
+  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr) 180px;
 }
 
 .serial-controls {
