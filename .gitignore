@@ -6,9 +6,11 @@ venv/
 venv311/
 .venv/
 .env
+.env.txt
 
 # Media Art Artifacts
 wav_archive/
+logs/
 *.wav
 *.mp3
 

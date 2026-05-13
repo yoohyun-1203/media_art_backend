@@ -12,18 +12,36 @@ import librosa
 
 from pythonosc.udp_client import SimpleUDPClient
 from google import genai
+from google.genai import types
 from openai import OpenAI
 
 # -------- API 키 보안 설정 --------
 # .env 파일에 숨겨둔 변수들을 불러옵니다.
-load_dotenv()
+if os.getenv("MEDIA_ART_LOAD_DOTENV", "1") != "0":
+    load_dotenv()
 
-# Gemini API 설정 (발급받은 키를 여기에 입력하세요)
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+gemini_client = None
+openai_client = None
 
-if not GEMINI_API_KEY:
-    print("오류: .env 파일에 GEMINI_API_KEY가 없습니다!")
-    exit(1)
+
+def get_gemini_client():
+    global gemini_client
+    if gemini_client is None:
+        api_key = os.getenv("GEMINI_API_KEY")
+        if not api_key:
+            raise RuntimeError("GEMINI_API_KEY is required")
+        gemini_client = genai.Client(api_key=api_key)
+    return gemini_client
+
+
+def get_openai_client():
+    global openai_client
+    if openai_client is None:
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            raise RuntimeError("OPENAI_API_KEY is required")
+        openai_client = OpenAI(api_key=api_key)
+    return openai_client
 
 # Suppress warnings
 warnings.filterwarnings("ignore")
@@ -32,24 +50,10 @@ import sys
 # Windows 터미널 한글 깨짐 방지
 if sys.platform == "win32":
     import io
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', line_buffering=True)
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', line_buffering=True)
-
-# 1. 클라우드 AI 모델 초기화 (API 방식 - 1초 컷 세팅)
-print("⚡ 초고속 클라우드 AI(OpenAI + Gemini)를 초기화합니다...")
-try:
-    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-    if not OPENAI_API_KEY:
-        print("오류: .env 파일에 OPENAI_API_KEY가 없습니다!")
-        exit(1)
-    
-    # 생성형 모델 및 Whisper API 초기화 (다운로드 없음!)
-    gemini_client = genai.Client(api_key=GEMINI_API_KEY)
-    openai_client = OpenAI(api_key=OPENAI_API_KEY)
-    print("✅ AI 클라이언트 세팅 완료!")
-except Exception as e:
-    print(f"API 세팅 중 오류 발생: {e}")
-    exit(1)
+    if (sys.stdout.encoding or "").lower().replace("-", "") != "utf8":
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', line_buffering=True)
+    if (sys.stderr.encoding or "").lower().replace("-", "") != "utf8":
+        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', line_buffering=True)
 
 # 오디오 설정
 DEVICE = 0  # 마이크 디바이스 번호 (0번)
@@ -67,6 +71,7 @@ os.makedirs(ARCHIVE_DIR, exist_ok=True)
 OSC_IP = "127.0.0.1"
 OSC_PORT = 5000
 osc_client = SimpleUDPClient(OSC_IP, OSC_PORT)
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 
 def analyze_audio_volume(data):
     """오디오 데이터의 볼륨(RMS)을 계산합니다."""
@@ -198,35 +203,141 @@ def find_word_in_grid(word):
                 return r, c
     return -1, -1
 
-# 모듈 최상단이나 초기화 부분에 로컬 파이프라인 추가
-try:
-    from transformers import pipeline
-    print("⚡ 0.1초 컷! 로컬 감성 분석 AI를 로드합니다...")
-    # 다국어(한국어 지원) 리뷰 감성 분석 모델 (1점~5점)
-    sentiment_model = pipeline(model="nlptown/bert-base-multilingual-uncased-sentiment")
-    print("✅ 로컬 감성 AI 로드 완료!")
-except Exception as e:
-    print(f"로컬 감성 AI 로드 실패 (API로 대체 불가능): {e}")
-    sentiment_model = None
+def clamp(value, min_value=-1.0, max_value=1.0):
+    return max(min(float(value), max_value), min_value)
+
+
+def _as_mono_float_audio(data):
+    samples = np.asarray(data)
+    if samples.size == 0:
+        return np.zeros(0, dtype=np.float32)
+    input_dtype = samples.dtype
+    if samples.ndim > 1:
+        samples = samples[:, 0]
+    samples = samples.astype(np.float32, copy=False)
+    if np.issubdtype(input_dtype, np.integer):
+        info = np.iinfo(input_dtype)
+        samples = samples / float(max(abs(info.min), info.max))
+    elif np.max(np.abs(samples)) > 1.5:
+        samples = samples / 32768.0
+    return samples
+
+
+def compute_live_audio_features(data, rate=RATE):
+    samples = _as_mono_float_audio(data)
+    if samples.size == 0:
+        samples = np.zeros(1, dtype=np.float32)
+
+    rms = float(np.sqrt(np.mean(np.square(samples))))
+
+    if samples.size > 1:
+        zcr = float(np.mean(np.diff(np.signbit(samples)) != 0))
+    else:
+        zcr = 0.0
+
+    magnitude = np.abs(np.fft.rfft(samples))
+    if float(np.sum(magnitude)) > 0.0:
+        freqs = np.fft.rfftfreq(samples.size, d=1.0 / float(rate))
+        spectral_centroid = float(np.sum(freqs * magnitude) / np.sum(magnitude))
+    else:
+        spectral_centroid = 0.0
+
+    norm_energy = clamp(rms / 0.08, 0.0, 1.0)
+    norm_zcr = clamp(zcr / 0.15, 0.0, 1.0)
+    norm_centroid = clamp(spectral_centroid / 3000.0, 0.0, 1.0)
+    arousal_raw = (norm_energy * 0.6) + (norm_zcr * 0.2) + (norm_centroid * 0.2)
+    arousal_live = clamp((arousal_raw * 2.0) - 1.0)
+    arousal_confidence = clamp((rms - 0.01) / 0.08, 0.0, 1.0)
+
+    return {
+        "arousal_live": arousal_live,
+        "arousal_confidence": arousal_confidence,
+        "rms": rms,
+        "zcr": zcr,
+        "spectral_centroid": spectral_centroid,
+    }
+
+
+def estimate_valence_confidence(transcript, valence):
+    clean_text = (transcript or "").strip()
+    if not clean_text:
+        return 0.0
+    length_score = clamp(len(clean_text) / 16.0, 0.0, 1.0)
+    polarity_score = clamp(abs(valence), 0.0, 1.0)
+    return clamp(0.15 + (length_score * 0.55) + (polarity_score * 0.30), 0.0, 1.0)
+
+
+def should_collect_live_segment(volume, features, threshold=THRESHOLD, min_confidence=0.45):
+    return float(volume) > float(threshold) and float(features.get("arousal_confidence", 0.0)) >= min_confidence
+
+
+def send_live_osc(
+    arousal_live=None,
+    arousal_confidence=None,
+    valence_target=None,
+    valence_confidence=None,
+    text_partial=None,
+    text_final=None,
+):
+    values = {
+        "/emotion/arousal_live": arousal_live,
+        "/emotion/arousal_confidence": arousal_confidence,
+        "/emotion/valence_target": valence_target,
+        "/emotion/valence_confidence": valence_confidence,
+        "/emotion/arousal": arousal_live,
+        "/emotion/valence": valence_target,
+        "/emotion/text_partial": text_partial,
+        "/emotion/text_final": text_final,
+    }
+    for address, value in values.items():
+        if value is not None:
+            osc_client.send_message(address, value)
+
+
+def extract_json(text):
+    start = text.find("{")
+    end = text.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        raise ValueError("JSON object not found in Gemini response")
+    return json.loads(text[start:end + 1])
 
 def get_ai_emotion(transcript, arousal=0.0):
-    """외부 API 통신을 완전히 없애고 로컬 AI로 0.1초만에 감정과 수치를 뽑아냅니다."""
+    """Gemini API로 텍스트의 Valence를 판단하고 Mood Meter 단어로 매핑합니다."""
     start_time = time.time()
-    
-    valence = 0.0
-    if sentiment_model:
-        try:
-            # 로컬 모델 예측: 예) [{'label': '5 stars', 'score': 0.8}]
-            result = sentiment_model(transcript)[0]
-            stars = int(result['label'].split()[0])
-            
-            # 1점 -> -1.0 (부정), 3점 -> 0.0 (중립), 5점 -> 1.0 (긍정)
-            valence = (stars - 3) / 2.0
-            
-            # 확률값(score)을 반영하여 세밀도 추가 (확률이 낮으면 0에 가깝게)
-            valence = valence * result['score']
-        except Exception as e:
-            print(f" -> 로컬 AI 분석 오류: {e}")
+
+    prompt = f"""
+한국어 발화의 감정 Valence를 분석하세요.
+Valence는 -1.0(매우 부정)부터 1.0(매우 긍정) 사이의 숫자입니다.
+반드시 JSON만 반환하세요.
+
+발화: {transcript}
+어투 기반 Arousal 참고값: {arousal:.3f}
+
+형식:
+{{"valence": 0.0}}
+"""
+
+    try:
+        response = get_gemini_client().models.generate_content(
+            model=GEMINI_MODEL,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                temperature=0,
+                maxOutputTokens=48,
+                responseMimeType="application/json",
+                thinkingConfig=types.ThinkingConfig(thinkingBudget=0),
+            ),
+        )
+        result = extract_json(response.text or "{}")
+        valence = clamp(result.get("valence", 0.0))
+    except RuntimeError as e:
+        if str(e) == "GEMINI_API_KEY is required":
+            raise
+        print(f" -> Gemini 감정 분석 오류: {e}")
+        valence = 0.0
+    except Exception as e:
+        print(f" -> Gemini 감정 분석 오류: {e}")
+        valence = 0.0
     
     # 🌟 핵심: Valence(긍정/부정)와 Arousal(흥분도) 2개의 수치만으로 100개 단어 맵에서 즉시 1개를 매핑!
     # API가 단어를 고르게 하는 대신, 수치를 기반으로 O(1) 속도로 좌표를 찾습니다.
@@ -237,58 +348,100 @@ def get_ai_emotion(transcript, arousal=0.0):
     emotion_word = MOOD_METER_GRID[row][col]
 
     elapsed_time = time.time() - start_time
-    print(f" -> ⏱️ 로컬 AI 감정 분석 소요 시간: {elapsed_time:.3f}초 (Valence: {valence:.2f})")
+    print(f" -> ⏱️ Gemini 감정 분석 소요 시간: {elapsed_time:.3f}초 (Valence: {valence:.2f})")
     
-    return emotion_word, max(min(valence, 1.0), -1.0)
+    return emotion_word, valence
 
-def process_audio(filepath):
-    """병렬 처리(멀티스레딩)가 적용된 초고속 분석 및 OSC 전송"""
+
+def map_touchdesigner_values(emotion_word, audio_arousal):
+    row, col = find_word_in_grid(emotion_word)
+
+    if row != -1 and col != -1:
+        if col < 5 and row < 5:
+            return "빨강 (Red)", -0.7, 0.7
+        if col >= 5 and row < 5:
+            return "노랑 (Yellow)", 0.7, 0.7
+        if col < 5 and row >= 5:
+            return "파랑 (Blue)", -0.7, -0.7
+        return "초록 (Green)", 0.7, -0.7
+
+    if audio_arousal > 0:
+        return "노랑 (Yellow) - 로컬대체", 0.5, audio_arousal
+    return "파랑 (Blue) - 로컬대체", -0.5, audio_arousal
+
+
+def send_emotion_osc(emotion_word, color_name, td_valence, td_arousal, text):
+    print(f">> OSC 데이터 전송 (포트 {OSC_PORT})")
+    osc_client.send_message("/emotion/word", emotion_word)
+    osc_client.send_message("/emotion/color_name", color_name)
+    osc_client.send_message("/emotion/valence", float(td_valence))
+    osc_client.send_message("/emotion/arousal", float(td_arousal))
+    osc_client.send_message("/emotion/text", text)
+    print("전송 완료!")
+
+
+def analyze_text_result(text, audio_arousal=0.0, send_osc=True):
+    emotion_word, valence = get_ai_emotion(text, arousal=audio_arousal)
+    color_name, td_valence, td_arousal = map_touchdesigner_values(emotion_word, audio_arousal)
+
+    result = {
+        "ok": True,
+        "transcript": text,
+        "emotion_word": emotion_word,
+        "valence": valence,
+        "audio_arousal": audio_arousal,
+        "color_name": color_name,
+        "td_valence": td_valence,
+        "td_arousal": td_arousal,
+        "osc_ip": OSC_IP,
+        "osc_port": OSC_PORT,
+    }
+
+    if send_osc:
+        send_emotion_osc(emotion_word, color_name, td_valence, td_arousal, text)
+        result["osc_sent"] = True
+    else:
+        result["osc_sent"] = False
+
+    return result
+
+
+def process_audio_result(filepath, send_osc=True):
+    """녹음 파일을 STT/감정 분석한 뒤 웹 UI가 표시할 수 있는 결과 dict를 반환합니다."""
     absolute_path = os.path.abspath(filepath) # 절대 경로 (에러 방지)
     print(f"\n[1/3] 음성 인식(STT) 진행 중... (파일: {absolute_path})")
     
     try:
-        # 1. Whisper STT (이건 오디오를 텍스트로 바꿔야 하니 먼저 실행)
-        prompt_hint = "안녕? 난 지금 기분이 아주 좋아. 넌 어때? 우울하거나 슬프진 않아? 정말 짜증나고 화가 나. 너무 신기하고 재미있다!"
-        with open(absolute_path, "rb") as audio_file:
-            transcript = openai_client.audio.transcriptions.create(
-                model="whisper-1", 
-                file=audio_file,
-                language="ko",
-                prompt=prompt_hint
-            ).text.strip()
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as arousal_executor:
+            arousal_future = arousal_executor.submit(analyze_arousal, absolute_path)
+
+            # 1. Whisper STT
+            prompt_hint = "안녕? 난 지금 기분이 아주 좋아. 넌 어때? 우울하거나 슬프진 않아? 정말 짜증나고 화가 나. 너무 신기하고 재미있다!"
+            with open(absolute_path, "rb") as audio_file:
+                transcript = get_openai_client().audio.transcriptions.create(
+                    model="whisper-1",
+                    file=audio_file,
+                    language="ko",
+                    prompt=prompt_hint
+                ).text.strip()
             
-        print(f" -> 인식된 텍스트: {transcript}")
+            print(f" -> 인식된 텍스트: {transcript}")
 
 
-        if not transcript:
-            print("인식된 텍스트가 없어 분석을 건너뜁니다.")
-            return False
+            if not transcript:
+                print("인식된 텍스트가 없어 분석을 건너뜁니다.")
+                return {"ok": False, "error": "인식된 텍스트가 없습니다.", "filepath": absolute_path}
 
-        print("[2/3 & 3/3] AI 감정 분석과 오디오 어투 분석을 ⚡0.1초만에⚡ 진행합니다...")
+            print("[2/3 & 3/3] AI 감정 분석과 오디오 어투 분석을 진행합니다...")
         
-        # 2 & 3. 0.1초 내외로 완료되므로 순차 실행 (API 통신 없음)
-        audio_arousal = analyze_arousal(absolute_path)
-        emotion_word, valence = get_ai_emotion(transcript, arousal=audio_arousal)
+            # 오디오 특징 분석은 Whisper API와 병렬로 시작해 둔 결과를 사용합니다.
+            audio_arousal = arousal_future.result()
 
-        # 4. 무드 미터 그리드에서 색상 찾기
-        row, col = find_word_in_grid(emotion_word)
-        
-        if row != -1 and col != -1:
-            if col < 5 and row < 5:
-                color_name, td_valence, td_arousal = "빨강 (Red)", -0.7, 0.7
-            elif col >= 5 and row < 5:
-                color_name, td_valence, td_arousal = "노랑 (Yellow)", 0.7, 0.7
-            elif col < 5 and row >= 5:
-                color_name, td_valence, td_arousal = "파랑 (Blue)", -0.7, -0.7
-            else:
-                color_name, td_valence, td_arousal = "초록 (Green)", 0.7, -0.7
-        else:
-            # API 실패 시 Fallback
-            if audio_arousal > 0:
-                color_name, td_valence = "노랑 (Yellow) - 로컬대체", 0.5
-            else:
-                color_name, td_valence = "파랑 (Blue) - 로컬대체", -0.5
-            td_arousal = audio_arousal
+        result = analyze_text_result(transcript, audio_arousal=audio_arousal, send_osc=False)
+        color_name = result["color_name"]
+        emotion_word = result["emotion_word"]
+        td_valence = result["td_valence"]
+        td_arousal = result["td_arousal"]
 
         # 결과 요약 출력
         print(f"\n==================================================")
@@ -298,19 +451,21 @@ def process_audio(filepath):
         print(f"==================================================")
 
         # 5. OSC 전송
-        print(f">> OSC 데이터 전송 (포트 5000)")
-        osc_client.send_message("/emotion/word", emotion_word)
-        osc_client.send_message("/emotion/color_name", color_name)
-        osc_client.send_message("/emotion/valence", float(td_valence))
-        osc_client.send_message("/emotion/arousal", float(td_arousal))
-        osc_client.send_message("/emotion/text", transcript)
-        print("전송 완료!")
+        if send_osc:
+            send_emotion_osc(emotion_word, color_name, td_valence, td_arousal, transcript)
+            result["osc_sent"] = True
         
-        return True
+        result["filepath"] = absolute_path
+        return result
 
     except Exception as e:
         print(f"데이터 처리 중 오류 발생: {e}")
-        return False
+        return {"ok": False, "error": str(e), "filepath": absolute_path}
+
+
+def process_audio(filepath):
+    """터미널용 기존 호출을 위해 성공 여부만 반환합니다."""
+    return bool(process_audio_result(filepath).get("ok"))
 
 def manage_archive_limit(archive_dir, max_files=20):
     """폴더 내의 wav 파일 개수를 제한하고, 초과 시 오래된 파일부터 삭제합니다."""

@@ -5,3 +5,6 @@ librosa
 python-osc
 numpy
 soundfile
+python-dotenv
+google-genai
+openai
