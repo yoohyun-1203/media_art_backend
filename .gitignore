@@ -11,6 +11,7 @@ venv311/
 # Media Art Artifacts
 wav_archive/
 logs/
+web/e2e_latest.json
 *.wav
 *.mp3
 
