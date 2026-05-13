@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Innerworld Voice Controller</title>
+    <link rel="stylesheet" href="./style.css">
+  </head>
+  <body>
+    <main class="shell">
+      <section class="control">
+        <div>
+          <p class="eyebrow">Innerworld</p>
+          <h1>Voice Controller</h1>
+        </div>
+        <div class="actions">
+          <button id="liveStartButton" type="button">실시간 시작</button>
+          <button id="liveStopButton" type="button" class="secondary">실시간 정지</button>
+          <button id="startButton" type="button" class="secondary">단발 음성 분석</button>
+          <button id="testButton" type="button" class="secondary">OSC 테스트</button>
+        </div>
+      </section>
+
+      <section class="status-band">
+        <div>
+          <p class="label">상태</p>
+          <p id="statusText" class="status">대기 중</p>
+        </div>
+        <div>
+          <p class="label">실시간</p>
+          <p id="liveStatusText" class="status compact">실시간 대기 중</p>
+        </div>
+        <div>
+          <p class="label">OSC</p>
+          <p id="oscText" class="mono">127.0.0.1:5000</p>
+        </div>
+      </section>
+
+      <section class="results">
+        <article>
+          <p class="label">Live Signal</p>
+          <dl>
+            <div><dt>Arousal Live</dt><dd id="liveArousal">-</dd></div>
+            <div><dt>Arousal Confidence</dt><dd id="arousalConfidence">-</dd></div>
+            <div><dt>Valence Confidence</dt><dd id="valenceConfidence">-</dd></div>
+          </dl>
+        </article>
+        <article>
+          <p class="label">Transcript</p>
+          <p id="transcript">아직 분석 결과가 없습니다.</p>
+        </article>
+        <article>
+          <p class="label">Emotion</p>
+          <p id="emotion">-</p>
+        </article>
+        <article>
+          <p class="label">TouchDesigner Values</p>
+          <dl>
+            <div><dt>Valence</dt><dd id="valence">-</dd></div>
+            <div><dt>Arousal</dt><dd id="arousal">-</dd></div>
+            <div><dt>RGB</dt><dd id="rgb">-</dd></div>
+          </dl>
+        </article>
+      </section>
+
+      <section class="log">
+        <p class="label">Raw Result</p>
+        <pre id="raw">{}</pre>
+      </section>
+    </main>
+    <script src="./app.js"></script>
+  </body>
+</html>
