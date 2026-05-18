@@ -39,6 +39,13 @@ function testBuildLedModelMapsBidirectionalArousalToLinearLeds() {
   assert.equal(model.leds[11].side, "right");
 }
 
+function testBuildLedModelUsesQuadrantColorsForControllerPreview() {
+  assert.equal(buildLedModel(-0.5, { arousal: -0.5 }).leds[0].color, "#2f7bff");
+  assert.equal(buildLedModel(-0.5, { arousal: 0.5 }).leds[0].color, "#ff3b30");
+  assert.equal(buildLedModel(0.5, { arousal: 0.5 }).leds[0].color, "#ffd60a");
+  assert.equal(buildLedModel(0.5, { arousal: -0.5 }).leds[0].color, "#34c759");
+}
+
 function testPayloadFromLiveStateUsesFastArousalAndLatestValence() {
   const parsed = payloadFromLiveState({
     latest: {
@@ -125,6 +132,7 @@ function testArduinoHardwareModelUsesUnoLineGeometry() {
 
 testParsePayloadClampsAndFormats();
 testBuildLedModelMapsBidirectionalArousalToLinearLeds();
+testBuildLedModelUsesQuadrantColorsForControllerPreview();
 testPayloadFromLiveStateUsesFastArousalAndLatestValence();
 testPayloadFromLiveStateFallsBackToCommonArousalForBothSides();
 testArduinoMoodTransformMatchesSketchMath();

@@ -1,6 +1,8 @@
 sounddevice
 openai-whisper
 transformers
+torch
+torchaudio
 librosa
 python-osc
 numpy

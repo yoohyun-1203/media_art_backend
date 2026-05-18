@@ -14,7 +14,7 @@ from audio_processing import (
     compute_live_audio_features,
     should_collect_live_segment,
 )
-from config import ARCHIVE_DIR, CHANNELS, CHUNK, DEVICE, LEFT_DEVICE, NOISE_GATE_DB, OSC_IP, OSC_PORT, RATE, RIGHT_DEVICE, SILENCE_LIMIT, THRESHOLD
+from config import ARCHIVE_DIR, CHANNELS, CHUNK, DEVICE, LEFT_DEVICE, LOCAL_SER_BACKEND, LOCAL_SER_MODEL_ID, NOISE_GATE_DB, OSC_IP, OSC_PORT, RATE, RIGHT_DEVICE, SILENCE_LIMIT, THRESHOLD
 from mood_meter import MOOD_METER_GRID, clamp, find_word_in_grid, map_touchdesigner_values
 from osc_sender import osc_client, send_emotion_osc, send_live_osc
 

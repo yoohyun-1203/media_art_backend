@@ -88,13 +88,22 @@ class LiveSignalCompositionTests(unittest.TestCase):
         signal = {"serial_prefix": "v", "valence": 0.0, "arousal": 0.42}
 
         with mock.patch.object(web_app.backend, "compute_live_audio_features", return_value=features) as compute_features, \
+             mock.patch.object(web_app.live_valence_tracker, "update", return_value={"valence": 0.0, "confidence": 0.0, "event": "start", "committed": False}) as update_valence, \
+             mock.patch.object(web_app, "smooth_td_arousal", return_value=0.21) as smooth_td_arousal, \
              mock.patch.object(web_app, "send_composed_live_signal", return_value=signal) as send_composed_live_signal, \
              mock.patch.object(web_app.backend, "process_audio_result") as process_audio_result:
             result = web_app.process_live_audio_chunk("audio chunk", overflowed=True, now=123.5)
 
         compute_features.assert_called_once_with("audio chunk", rate=web_app.backend.RATE)
+        update_valence.assert_called_once_with(
+            candidate_valence=0.0,
+            candidate_confidence=0.0,
+            has_signal=True,
+            now=123.5,
+        )
+        smooth_td_arousal.assert_called_once_with(0.42)
         send_composed_live_signal.assert_called_once_with(
-            arousal_live=0.42,
+            arousal_live=0.21,
             arousal_confidence=0.8,
             latest_valence=0.0,
             latest_valence_confidence=0.0,
@@ -108,6 +117,7 @@ class LiveSignalCompositionTests(unittest.TestCase):
         self.assertEqual(result["valence_target"], 0.0)
         self.assertEqual(result["valence_confidence"], 0.0)
         self.assertEqual(result["serial_prefix"], "v")
+        self.assertIn("processing_ms", result)
 
     def test_live_audio_chunk_uses_ser_valence_without_replacing_feature_arousal(self):
         features = {
@@ -130,13 +140,15 @@ class LiveSignalCompositionTests(unittest.TestCase):
 
         with mock.patch.object(web_app.backend, "compute_live_audio_features", return_value=features), \
              mock.patch.object(web_app, "local_ser_runtime", fake_ser_runtime), \
+             mock.patch.object(web_app.live_valence_tracker, "update", return_value={"valence": -0.6, "confidence": 0.75, "event": "continue", "committed": False}), \
+             mock.patch.object(web_app, "smooth_td_arousal", return_value=0.21), \
              mock.patch.object(web_app, "send_composed_live_signal", return_value=signal) as send_composed_live_signal, \
              mock.patch.object(web_app.backend, "process_audio_result") as process_audio_result:
             result = web_app.process_live_audio_chunk("audio chunk", overflowed=False, now=123.5)
 
         fake_ser_runtime.process.assert_called_once_with("audio chunk", arousal_hint=0.42)
         send_composed_live_signal.assert_called_once_with(
-            arousal_live=0.42,
+            arousal_live=0.21,
             arousal_confidence=0.8,
             latest_valence=-0.6,
             latest_valence_confidence=0.75,
@@ -150,6 +162,7 @@ class LiveSignalCompositionTests(unittest.TestCase):
         self.assertEqual(result["valence_confidence"], 0.75)
         self.assertEqual(result["ser_label"], "tense")
         self.assertEqual(result["ser_arousal"], -0.2)
+        self.assertIn("processing_ms", result)
 
     def test_dual_live_audio_chunk_sends_left_and_right_arousal_separately(self):
         features = {
@@ -174,6 +187,8 @@ class LiveSignalCompositionTests(unittest.TestCase):
 
         with mock.patch.object(web_app.backend, "compute_dual_live_audio_features", return_value=features) as compute_features, \
              mock.patch.object(web_app, "local_ser_runtime", fake_ser_runtime), \
+             mock.patch.object(web_app.live_valence_tracker, "update", return_value={"valence": 0.25, "confidence": 0.6, "event": "continue", "committed": False}), \
+             mock.patch.object(web_app, "smooth_td_arousal", return_value=0.35), \
              mock.patch.object(web_app, "compose_led_mood_signal", return_value=signal), \
              mock.patch.object(web_app.backend, "send_live_osc") as send_live_osc:
             result = web_app.process_dual_live_audio_chunk("left audio", "right audio", overflowed=True, now=123.5)
@@ -194,6 +209,7 @@ class LiveSignalCompositionTests(unittest.TestCase):
         self.assertEqual(result["left_arousal_live"], -0.3)
         self.assertEqual(result["right_arousal_live"], 0.7)
         self.assertEqual(result["valence_target"], 0.25)
+        self.assertIn("processing_ms", result)
 
 
 class VirtualMicWebTests(unittest.TestCase):
@@ -286,6 +302,35 @@ class DebugConsoleTests(unittest.TestCase):
         self.assertEqual(len(result["devices"]), 1)
         self.assertEqual(result["devices"][0]["index"], 1)
         self.assertTrue(result["devices"][0]["selected"])
+
+
+class EvaluationTests(unittest.TestCase):
+    def setUp(self):
+        with web_app.evaluation_lock:
+            web_app.evaluation_samples.clear()
+
+    def test_record_evaluation_sample_compares_latest_prediction(self):
+        with mock.patch.object(web_app, "get_live", return_value={"latest": {
+            "ser_label": "hap",
+            "valence_target": 0.8,
+            "ser_confidence": 0.9,
+            "arousal_live": 0.4,
+        }}):
+            sample = web_app.record_evaluation_sample("hap")
+
+        self.assertTrue(sample["correct"])
+        self.assertEqual(sample["predicted_label"], "hap")
+
+    def test_evaluation_summary_reports_accuracy(self):
+        with mock.patch.object(web_app, "get_live", return_value={"latest": {"ser_label": "sad"}}):
+            web_app.record_evaluation_sample("sad")
+            web_app.record_evaluation_sample("hap")
+
+        summary = web_app.evaluation_summary()
+
+        self.assertEqual(summary["count"], 2)
+        self.assertEqual(summary["correct"], 1)
+        self.assertEqual(summary["accuracy"], 0.5)
 
 
 if __name__ == "__main__":

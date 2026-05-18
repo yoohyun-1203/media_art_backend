@@ -626,6 +626,43 @@ body[data-live-status="listening"] #liveStatusText {
   outline: 1px solid rgba(255, 197, 71, 0.3);
 }
 
+.evaluation-section {
+  display: grid;
+  gap: 14px;
+}
+
+.evaluation-head,
+.evaluation-actions {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.evaluation-actions {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+}
+
+.evaluation-list {
+  display: grid;
+  gap: 8px;
+}
+
+.evaluation-row {
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.evaluation-row[data-correct="true"] {
+  border-left: 4px solid #34c759;
+}
+
+.evaluation-row[data-correct="false"] {
+  border-left: 4px solid #ff3b30;
+}
+
 @media (max-width: 760px) {
   .serial-layout,
   .serial-preview-head,

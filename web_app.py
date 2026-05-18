@@ -8,8 +8,8 @@ from pathlib import Path
 
 import audio_io
 import main as backend
-from live_signal import compose_led_mood_signal
-from local_ser import LocalSerRuntime
+from live_signal import EnvelopeSmoother, UtteranceValenceTracker, compose_led_mood_signal
+from local_ser import LocalSerRuntime, build_local_ser_model
 from mood_meter import clamp_mood_value, mood_payload
 from td_bridge_client import (
     OSC_IN_PATH,
@@ -33,7 +33,25 @@ DEBUG_OSC_PATTERNS = {
     "green_low": {"label": "green/low", "valence": 0.7, "arousal": -0.7},
     "neutral": {"label": "neutral", "valence": 0.0, "arousal": 0.0},
 }
-local_ser_runtime = LocalSerRuntime(rate=backend.RATE, seconds=1.0)
+local_ser_runtime = LocalSerRuntime(
+    model=build_local_ser_model(
+        backend.LOCAL_SER_MODEL_ID,
+        input_rate=backend.RATE,
+        backend=backend.LOCAL_SER_BACKEND,
+    ),
+    rate=backend.RATE,
+    seconds=0.7,
+)
+live_valence_tracker = UtteranceValenceTracker(
+    silence_seconds=0.5,
+    max_utterance_seconds=4.0,
+    early_commit_min_candidates=3,
+    early_commit_min_confidence=0.6,
+    min_hold_seconds=3.0,
+    switch_min_candidates=5,
+    switch_min_confidence=0.75,
+)
+td_arousal_smoother = EnvelopeSmoother(value=0.0, attack=0.18, release=0.08)
 
 job_lock = threading.Lock()
 job_state = {
@@ -69,6 +87,9 @@ virtual_mic_state = {
     "arousalMirrorStrategy": virtual_mic_scenarios.AROUSAL_MIRROR_STRATEGY,
 }
 
+evaluation_lock = threading.Lock()
+evaluation_samples = []
+
 
 def set_job(**updates):
     with job_lock:
@@ -101,6 +122,40 @@ def set_virtual_mic(**updates):
 def get_virtual_mic():
     with virtual_mic_lock:
         return dict(virtual_mic_state)
+
+
+def record_evaluation_sample(expected_label):
+    allowed = {"ang", "sad", "neu", "hap"}
+    label = str(expected_label or "").strip().lower()
+    if label not in allowed:
+        raise ValueError("expected_label must be one of ang, sad, neu, hap")
+
+    latest = get_live().get("latest") or {}
+    sample = {
+        "timestamp": time.time(),
+        "expected_label": label,
+        "predicted_label": str(latest.get("ser_label", "unknown")),
+        "valence_live": float(latest.get("valence_target", 0.0)),
+        "ser_confidence": float(latest.get("ser_confidence", 0.0)),
+        "arousal_live": float(latest.get("arousal_live", 0.0)),
+    }
+    sample["correct"] = sample["expected_label"] == sample["predicted_label"]
+    with evaluation_lock:
+        evaluation_samples.append(sample)
+        del evaluation_samples[:-50]
+        return sample
+
+
+def evaluation_summary():
+    with evaluation_lock:
+        samples = list(evaluation_samples)
+    correct = sum(1 for sample in samples if sample["correct"])
+    return {
+        "count": len(samples),
+        "correct": correct,
+        "accuracy": round(correct / len(samples), 3) if samples else None,
+        "samples": samples[-12:],
+    }
 
 
 def run_virtual_mic_scenario(name, duration_scale=1.0, readback=False):
@@ -365,34 +420,52 @@ def send_composed_live_signal(
     return signal
 
 
+def smooth_td_arousal(arousal):
+    return td_arousal_smoother.update(arousal)
+
+
 def process_live_audio_chunk(data, overflowed=False, now=None):
+    process_start = time.perf_counter()
+    timestamp = time.time() if now is None else now
     features = backend.compute_live_audio_features(data, rate=backend.RATE)
     arousal_confidence = float(features.get("arousal_confidence", 0.0))
     ser_result = local_ser_runtime.process(data, arousal_hint=features["arousal_live"])
     ser_confidence = float(ser_result.get("confidence", 0.0))
+    valence_state = live_valence_tracker.update(
+        candidate_valence=float(ser_result.get("valence", 0.0)),
+        candidate_confidence=ser_confidence,
+        has_signal=arousal_confidence > 0.0,
+        now=timestamp,
+    )
     signal = send_composed_live_signal(
-        arousal_live=features["arousal_live"],
+        arousal_live=smooth_td_arousal(features["arousal_live"]),
         arousal_confidence=arousal_confidence,
-        latest_valence=float(ser_result.get("valence", 0.0)),
-        latest_valence_confidence=ser_confidence,
+        latest_valence=valence_state["valence"],
+        latest_valence_confidence=valence_state["confidence"],
         ambient_valence=0.0,
         ambient_arousal=0.0,
         has_mic_activity=arousal_confidence > 0.0,
     )
     return {
         **features,
-        "timestamp": time.time() if now is None else now,
+        "processing_ms": round((time.perf_counter() - process_start) * 1000.0, 3),
+        "timestamp": timestamp,
         "overflowed": bool(overflowed),
         "valence_target": signal["valence"],
         "valence_confidence": ser_confidence,
         "ser_arousal": float(ser_result.get("arousal", features["arousal_live"])),
         "ser_confidence": ser_confidence,
         "ser_label": str(ser_result.get("label", "unknown")),
+        "ser_backend": backend.LOCAL_SER_BACKEND,
+        "valence_segment_event": valence_state["event"],
+        "valence_committed": valence_state["committed"],
         "serial_prefix": signal.get("serial_prefix", "v"),
     }
 
 
 def process_dual_live_audio_chunk(left_data, right_data, overflowed=False, now=None):
+    process_start = time.perf_counter()
+    timestamp = time.time() if now is None else now
     features = backend.compute_dual_live_audio_features(left_data, right_data, rate=backend.RATE)
     arousal_confidence = float(features.get("arousal_confidence", 0.0))
     primary_data = left_data
@@ -400,11 +473,17 @@ def process_dual_live_audio_chunk(left_data, right_data, overflowed=False, now=N
         primary_data = right_data
     ser_result = local_ser_runtime.process(primary_data, arousal_hint=features["arousal_live"])
     ser_confidence = float(ser_result.get("confidence", 0.0))
+    valence_state = live_valence_tracker.update(
+        candidate_valence=float(ser_result.get("valence", 0.0)),
+        candidate_confidence=ser_confidence,
+        has_signal=arousal_confidence > 0.0,
+        now=timestamp,
+    )
     signal = compose_led_mood_signal(
-        arousal_live=features["arousal_live"],
+        arousal_live=smooth_td_arousal(features["arousal_live"]),
         arousal_confidence=arousal_confidence,
-        latest_valence=float(ser_result.get("valence", 0.0)),
-        latest_valence_confidence=ser_confidence,
+        latest_valence=valence_state["valence"],
+        latest_valence_confidence=valence_state["confidence"],
         ambient_valence=0.0,
         ambient_arousal=0.0,
         has_mic_activity=arousal_confidence > 0.0,
@@ -421,13 +500,17 @@ def process_dual_live_audio_chunk(left_data, right_data, overflowed=False, now=N
     )
     return {
         **features,
-        "timestamp": time.time() if now is None else now,
+        "processing_ms": round((time.perf_counter() - process_start) * 1000.0, 3),
+        "timestamp": timestamp,
         "overflowed": bool(overflowed),
         "valence_target": signal["valence"],
         "valence_confidence": ser_confidence,
         "ser_arousal": float(ser_result.get("arousal", features["arousal_live"])),
         "ser_confidence": ser_confidence,
         "ser_label": str(ser_result.get("label", "unknown")),
+        "ser_backend": backend.LOCAL_SER_BACKEND,
+        "valence_segment_event": valence_state["event"],
+        "valence_committed": valence_state["committed"],
         "serial_prefix": signal.get("serial_prefix", "v"),
         "live_input_mode": "dual_devices",
         "left_device": backend.LEFT_DEVICE,
@@ -529,6 +612,8 @@ def start_live():
     state = get_live()
     if state.get("running"):
         return False, state
+    live_valence_tracker.reset()
+    td_arousal_smoother.value = 0.0
     live_stop_event.clear()
     live_thread = threading.Thread(target=live_worker, daemon=True)
     live_thread.start()
@@ -588,6 +673,9 @@ class Handler(SimpleHTTPRequestHandler):
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, status=500)
             return
+        if self.path == "/api/evaluation":
+            self.send_json({"ok": True, **evaluation_summary()})
+            return
         if self.path == "/api/health":
             self.send_json({
                 "ok": True,
@@ -622,6 +710,15 @@ class Handler(SimpleHTTPRequestHandler):
 
         if self.path == "/api/live/stop":
             self.send_json({"ok": True, "state": stop_live()})
+            return
+
+        if self.path == "/api/evaluation/record":
+            try:
+                body = self.read_json()
+                sample = record_evaluation_sample(body.get("expectedLabel"))
+                self.send_json({"ok": True, "sample": sample, **evaluation_summary()})
+            except ValueError as exc:
+                self.send_json({"ok": False, "error": str(exc)}, status=400)
             return
 
         if self.path == "/api/virtual-mic/run":

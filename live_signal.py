@@ -61,6 +61,129 @@ class SegmentEndpoint:
         return "continue"
 
 
+class UtteranceValenceTracker:
+    """Hold valence steady during speech, then commit one value per utterance."""
+
+    def __init__(
+        self,
+        silence_seconds=0.5,
+        max_utterance_seconds=4.0,
+        early_commit_min_candidates=3,
+        early_commit_min_confidence=0.6,
+        min_hold_seconds=3.0,
+        switch_min_candidates=5,
+        switch_min_confidence=0.75,
+    ):
+        self.endpoint = SegmentEndpoint(silence_seconds=silence_seconds)
+        self.max_utterance_seconds = float(max_utterance_seconds)
+        self.early_commit_min_candidates = int(early_commit_min_candidates)
+        self.early_commit_min_confidence = float(early_commit_min_confidence)
+        self.min_hold_seconds = float(min_hold_seconds)
+        self.switch_min_candidates = int(switch_min_candidates)
+        self.switch_min_confidence = float(switch_min_confidence)
+        self.committed_valence = 0.0
+        self.committed_confidence = 0.0
+        self.last_committed_at = None
+        self._candidates = []
+        self._utterance_started_at = None
+
+    def reset(self):
+        self.endpoint = SegmentEndpoint(silence_seconds=self.endpoint.silence_seconds)
+        self.committed_valence = 0.0
+        self.committed_confidence = 0.0
+        self.last_committed_at = None
+        self._candidates = []
+        self._utterance_started_at = None
+
+    def _candidate_summary(self):
+        if not self._candidates:
+            return None
+        total_weight = sum(confidence for _valence, confidence in self._candidates)
+        if total_weight <= 0.0:
+            return None
+        valence = sum(
+            valence * confidence for valence, confidence in self._candidates
+        ) / total_weight
+        confidence = max(confidence for _valence, confidence in self._candidates)
+        return valence, confidence
+
+    def _commit(self, now):
+        summary = self._candidate_summary()
+        if summary is None:
+            return False
+        candidate_valence, candidate_confidence = summary
+        if not self._can_replace_committed(candidate_valence, candidate_confidence, now):
+            self._candidates = []
+            return False
+        self.committed_valence = candidate_valence
+        self.committed_confidence = candidate_confidence
+        self.last_committed_at = float(now)
+        self._candidates = []
+        return True
+
+    def _can_early_commit(self):
+        if len(self._candidates) < self.early_commit_min_candidates:
+            return False
+        recent = self._candidates[-self.early_commit_min_candidates :]
+        signs = {1 if valence >= 0.0 else -1 for valence, _confidence in recent}
+        confidences = [confidence for _valence, confidence in recent]
+        return len(signs) == 1 and min(confidences) >= self.early_commit_min_confidence
+
+    def _can_replace_committed(self, candidate_valence, candidate_confidence, now):
+        if self.committed_confidence <= 0.0 or self.last_committed_at is None:
+            return True
+
+        same_direction = (candidate_valence >= 0.0) == (self.committed_valence >= 0.0)
+        if same_direction:
+            return True
+
+        if float(now) - self.last_committed_at < self.min_hold_seconds:
+            return False
+
+        recent = self._candidates[-self.switch_min_candidates :]
+        if len(recent) < self.switch_min_candidates:
+            return False
+        signs = {1 if valence >= 0.0 else -1 for valence, _confidence in recent}
+        confidences = [confidence for _valence, confidence in recent]
+        return (
+            len(signs) == 1
+            and min(confidences) >= self.switch_min_confidence
+            and float(candidate_confidence) >= self.switch_min_confidence
+        )
+
+    def update(self, candidate_valence, candidate_confidence, has_signal, now):
+        event = self.endpoint.update(has_signal=has_signal, now=now)
+        if event == "start":
+            self._utterance_started_at = float(now)
+
+        confidence = max(0.0, min(1.0, float(candidate_confidence)))
+        if has_signal and confidence > 0.0:
+            self._candidates.append((_clamp(candidate_valence), confidence))
+
+        committed = False
+        if event == "end":
+            committed = self._commit(now)
+            self._utterance_started_at = None
+        elif self.committed_confidence <= 0.0 and self._can_early_commit():
+            committed = self._commit(now)
+        elif (
+            self.endpoint.active
+            and self._utterance_started_at is not None
+            and float(now) - self._utterance_started_at >= self.max_utterance_seconds
+        ):
+            # Long uninterrupted speech: refresh slowly without word-level flicker.
+            committed = self._commit(now)
+            self._utterance_started_at = float(now)
+
+        return {
+            "valence": self.committed_valence,
+            "confidence": self.committed_confidence,
+            "event": event,
+            "committed": committed,
+            "candidate_count": len(self._candidates),
+        }
+
+
 class SpeakerBleedGate:
     """Two-mic speaker-bleed attenuation heuristic, not AEC or standalone VAD."""
 

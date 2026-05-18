@@ -8,8 +8,8 @@
   - `NoiseFloorTracker`, `EnvelopeSmoother`, `SegmentEndpoint`, `SpeakerBleedGate`, `compose_led_mood_signal`
   - 즉시 반응용 arousal/envelope/segment 판단을 담당합니다.
 - `local_ser.py`
-  - `RollingSerWindow.push(pcm)`, `LocalSerFallback`
-  - 실제 SER 모델이 아니라 adapter/fallback 레이어입니다. 모델 선택과 통합은 남은 작업입니다.
+  - `RollingSerWindow.push(pcm)`, `LocalSerFallback`, `HuggingFaceAudioSerModel`
+  - `LOCAL_SER_MODEL_ID`가 있으면 로컬 audio-classification 모델을 lazy-load해 live valence를 추정하고, 없거나 실패하면 fallback을 유지합니다.
 - `ambient_emotion.py`
   - confidence-weighted `average_mood(items)`
   - 느린 ambient/background average mood 계산용입니다. 아직 Gemini batch integration은 없습니다.

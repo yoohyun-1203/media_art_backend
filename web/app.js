@@ -10,6 +10,12 @@ const valence = document.querySelector("#valence");
 const arousal = document.querySelector("#arousal");
 const liveArousal = document.querySelector("#liveArousal");
 const arousalConfidence = document.querySelector("#arousalConfidence");
+const liveValence = document.querySelector("#liveValence");
+const liveSerBackend = document.querySelector("#liveSerBackend");
+const liveSerLabel = document.querySelector("#liveSerLabel");
+const liveSerConfidence = document.querySelector("#liveSerConfidence");
+const liveProcessingMs = document.querySelector("#liveProcessingMs");
+const liveRms = document.querySelector("#liveRms");
 const valenceConfidence = document.querySelector("#valenceConfidence");
 const rgb = document.querySelector("#rgb");
 const raw = document.querySelector("#raw");
@@ -46,6 +52,9 @@ const debugSerialText = document.querySelector("#debugSerialText");
 const debugMicText = document.querySelector("#debugMicText");
 const debugRaw = document.querySelector("#debugRaw");
 const ledPreviewModel = window.InnerworldLedPreview;
+const evaluationSummary = document.querySelector("#evaluationSummary");
+const evaluationList = document.querySelector("#evaluationList");
+const evaluationButtons = document.querySelectorAll("[data-eval-label]");
 
 let pollTimer = null;
 let livePollTimer = null;
@@ -213,6 +222,46 @@ async function debugPost(path, body = {}) {
     throw new Error(payload.error || `${path} failed: ${response.status}`);
   }
   return payload;
+}
+
+function renderEvaluation(payload) {
+  if (!evaluationSummary || !evaluationList) {
+    return;
+  }
+  const accuracy = payload.accuracy === null || payload.accuracy === undefined
+    ? "-"
+    : `${Math.round(payload.accuracy * 100)}%`;
+  evaluationSummary.textContent = `${payload.count || 0} samples / accuracy ${accuracy}`;
+  evaluationList.innerHTML = "";
+  for (const sample of [...(payload.samples || [])].reverse()) {
+    const row = document.createElement("div");
+    row.className = "evaluation-row";
+    row.dataset.correct = sample.correct ? "true" : "false";
+    row.textContent = `정답 ${sample.expected_label} / 예측 ${sample.predicted_label} / val ${fmt(sample.valence_live)} / conf ${fmt(sample.ser_confidence)}`;
+    evaluationList.appendChild(row);
+  }
+}
+
+async function loadEvaluation() {
+  const response = await fetch("/api/evaluation");
+  const payload = await response.json();
+  if (!response.ok || !payload.ok) {
+    throw new Error(payload.error || `evaluation load failed: ${response.status}`);
+  }
+  renderEvaluation(payload);
+}
+
+async function recordEvaluation(expectedLabel) {
+  const response = await fetch("/api/evaluation/record", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ expectedLabel }),
+  });
+  const payload = await response.json();
+  if (!response.ok || !payload.ok) {
+    throw new Error(payload.error || `evaluation record failed: ${response.status}`);
+  }
+  renderEvaluation(payload);
 }
 
 async function runDebugAction(label, action) {
@@ -524,6 +573,14 @@ function renderLiveState(state) {
   if (state.latest) {
     liveArousal.textContent = fmt(state.latest.arousal_live);
     arousalConfidence.textContent = fmt(state.latest.arousal_confidence);
+    liveValence.textContent = fmt(state.latest.valence_target);
+    liveSerBackend.textContent = state.latest.ser_backend || "-";
+    liveSerLabel.textContent = state.latest.ser_label || "-";
+    liveSerConfidence.textContent = fmt(state.latest.ser_confidence);
+    liveProcessingMs.textContent = typeof state.latest.processing_ms === "number"
+      ? `${state.latest.processing_ms.toFixed(3)} ms`
+      : "-";
+    liveRms.textContent = fmt(state.latest.rms);
   }
   if (state.result) {
     renderResult(state.result);
@@ -721,6 +778,16 @@ if (debugAudioProbeButton) {
   });
 }
 
+for (const button of evaluationButtons) {
+  button.addEventListener("click", () => {
+    recordEvaluation(button.dataset.evalLabel).catch((error) => {
+      if (evaluationSummary) {
+        evaluationSummary.textContent = error.message;
+      }
+    });
+  });
+}
+
 buildControllerPreview();
 buildArduinoHardwarePreview();
 renderLedPreviewFromState({});
@@ -738,6 +805,11 @@ loadVirtualMicScenarios()
       virtualStatusText.textContent = error.message;
     }
   });
+loadEvaluation().catch((error) => {
+  if (evaluationSummary) {
+    evaluationSummary.textContent = error.message;
+  }
+});
 pollStatus();
 pollLiveStatus();
 if (debugSnapshotButton) {

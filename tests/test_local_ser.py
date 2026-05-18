@@ -6,7 +6,15 @@ from unittest import mock
 
 import numpy as np
 
-from local_ser import LocalSerFallback, LocalSerModelAdapter, LocalSerRuntime, RollingSerWindow
+from local_ser import (
+    AudeeringDimensionalSerModel,
+    HuggingFaceAudioSerModel,
+    LocalSerFallback,
+    LocalSerModelAdapter,
+    LocalSerRuntime,
+    RollingSerWindow,
+    build_local_ser_model,
+)
 
 
 class RollingSerWindowTests(unittest.TestCase):
@@ -164,6 +172,85 @@ class LocalSerModelAdapterTests(unittest.TestCase):
             sys.modules.pop("local_ser", None)
             if old_module is not None:
                 sys.modules["local_ser"] = old_module
+
+
+class HuggingFaceAudioSerModelTests(unittest.TestCase):
+    def test_predict_maps_emotion_label_to_valence(self):
+        classifier = mock.Mock(return_value=[[{"label": "happiness", "score": 0.91}]])
+        model = HuggingFaceAudioSerModel("demo/model", classifier=classifier)
+
+        result = model.predict(np.zeros(16000, dtype=np.float32), arousal_hint=0.4)
+
+        self.assertEqual(result["label"], "happiness")
+        self.assertEqual(result["valence"], 0.8)
+        self.assertEqual(result["arousal"], 0.4)
+        self.assertEqual(result["confidence"], 0.91)
+        classifier.assert_called_once()
+        self.assertEqual(classifier.call_args.args[0]["sampling_rate"], 16000)
+
+    def test_predict_maps_superb_short_labels_to_valence(self):
+        classifier = mock.Mock(return_value=[[{"label": "ang", "score": 0.91}]])
+        model = HuggingFaceAudioSerModel("demo/model", classifier=classifier)
+
+        result = model.predict(np.zeros(16000, dtype=np.float32), arousal_hint=0.4)
+
+        self.assertEqual(result["label"], "ang")
+        self.assertEqual(result["valence"], -0.8)
+
+    def test_predict_passes_actual_input_rate_for_pipeline_resampling(self):
+        classifier = mock.Mock(return_value=[[{"label": "sadness", "score": 0.7}]])
+        model = HuggingFaceAudioSerModel("demo/model", classifier=classifier, input_rate=48000)
+
+        model.predict(np.zeros(48000, dtype=np.float32), arousal_hint=-0.2)
+
+        payload = classifier.call_args.args[0]
+        self.assertEqual(payload["sampling_rate"], 48000)
+        self.assertEqual(payload["raw"].shape[0], 48000)
+
+    def test_build_local_ser_model_is_disabled_without_model_id(self):
+        self.assertIsNone(build_local_ser_model(""))
+
+    def test_build_local_ser_model_returns_lazy_adapter_with_model_id(self):
+        self.assertIsInstance(build_local_ser_model("demo/model"), LocalSerModelAdapter)
+
+
+class AudeeringDimensionalSerModelTests(unittest.TestCase):
+    def test_predict_maps_direct_regression_outputs_to_signed_range(self):
+        class FakeProcessor:
+            def __call__(self, samples, sampling_rate):
+                return {"input_values": [samples]}
+
+        class FakeTensor:
+            def detach(self):
+                return self
+
+            def cpu(self):
+                return self
+
+            def numpy(self):
+                return np.array([[0.8, 0.5, 0.2]], dtype=np.float32)
+
+        class FakeModel:
+            def __call__(self, input_values):
+                return None, FakeTensor()
+
+        with mock.patch.dict(sys.modules, {"torch": mock.Mock(from_numpy=lambda value: mock.Mock(reshape=lambda *_args: value), no_grad=lambda: mock.MagicMock())}):
+            model = AudeeringDimensionalSerModel(
+                "demo/model",
+                processor=FakeProcessor(),
+                model=FakeModel(),
+            )
+            result = model.predict(np.zeros(16000, dtype=np.float32))
+
+        self.assertAlmostEqual(result["arousal"], 0.6)
+        self.assertAlmostEqual(result["valence"], -0.6)
+        self.assertEqual(result["label"], "dimensional")
+
+    def test_build_local_ser_model_supports_audeering_backend(self):
+        self.assertIsInstance(
+            build_local_ser_model("demo/model", backend="audeering_dimensional"),
+            LocalSerModelAdapter,
+        )
 
 
 class LocalSerRuntimeTests(unittest.TestCase):

@@ -71,6 +71,24 @@
     return `hsl(${hue.toFixed(1)} ${saturation.toFixed(1)}% ${lightness.toFixed(1)}%)`;
   }
 
+  // Test-only controller preview palette:
+  // (-, -) blue / (-, +) red / (+, +) yellow / (+, -) green
+  function colorForQuadrant(valence, arousal) {
+    const isPositiveValence = toNumber(valence) >= 0;
+    const isPositiveArousal = toNumber(arousal) >= 0;
+
+    if (!isPositiveValence && !isPositiveArousal) {
+      return "#2f7bff";
+    }
+    if (!isPositiveValence && isPositiveArousal) {
+      return "#ff3b30";
+    }
+    if (isPositiveValence && isPositiveArousal) {
+      return "#ffd60a";
+    }
+    return "#34c759";
+  }
+
   function percentFromSignedFloat(value) {
     const clamped = clamp(toNumber(value), -1, 1);
     return clamp(Math.trunc((clamped + 1) * 50 + 0.5), 0, 100);
@@ -371,6 +389,13 @@
     const rightActiveCount = arousalToCount(rightArousal);
     const leftBrightness = arousalToBrightness(leftArousal);
     const rightBrightness = arousalToBrightness(rightArousal);
+    const previewArousal = firstNumber([
+      arousalInput?.arousal,
+      arousalInput?.mirrorArousal,
+      arousalInput?.arousalLive,
+      arousalInput?.arousal_live,
+    ], (leftArousal + rightArousal) / 2);
+    const quadrantColor = colorForQuadrant(valence, previewArousal);
 
     const leds = [];
     for (let index = 0; index < LED_COUNT; index += 1) {
@@ -383,14 +408,13 @@
         rightActive ? rightBrightness : 0,
       );
       const localBrightness = sourceBrightness * (0.8 + (index % 2) * 0.08);
-      const color = colorForValence(valence, localBrightness);
       leds.push({
         index,
         active,
         leftActive,
         rightActive,
         side,
-        color,
+        color: quadrantColor,
         opacity: active ? 1 : 0.3,
         glow: active ? Math.round(7 + localBrightness * 18) : 0,
       });
