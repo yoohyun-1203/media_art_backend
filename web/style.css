@@ -177,6 +177,198 @@ dd {
   margin-top: 14px;
 }
 
+.live-led-section,
+.arduino-preview-section {
+  margin-top: 14px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.virtual-mic-section {
+  margin-top: 14px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.debug-section {
+  margin-top: 14px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.virtual-mic-head {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+
+.virtual-mic-head h2 {
+  margin: 0;
+  font-size: 22px;
+  line-height: 1.2;
+}
+
+.virtual-mic-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.debug-head {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+
+.debug-head h2 {
+  margin: 0;
+  font-size: 22px;
+  line-height: 1.2;
+}
+
+.debug-actions,
+.debug-control-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 10px;
+}
+
+.virtual-mic-actions select {
+  min-height: 42px;
+  max-width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0 12px;
+  background: #fff;
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.debug-controls {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.9fr) minmax(300px, 1.1fr) minmax(260px, 1fr);
+  gap: 14px;
+}
+
+.debug-control-group {
+  align-items: end;
+  padding: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.debug-control-group label {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.debug-control-group select,
+.debug-control-group input {
+  min-height: 42px;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0 12px;
+  background: #fff;
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.debug-control-group input {
+  width: 88px;
+}
+
+#debugPatternSelect {
+  min-width: 150px;
+}
+
+#debugAudioDeviceSelect {
+  width: min(100%, 320px);
+}
+
+.virtual-readback-toggle {
+  min-height: 42px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.virtual-readback-toggle input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--accent);
+}
+
+.virtual-mic-grid {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.7fr) minmax(260px, 1.1fr) minmax(220px, 0.8fr);
+  gap: 14px;
+}
+
+.debug-grid {
+  display: grid;
+  grid-template-columns: minmax(160px, 0.8fr) minmax(180px, 0.8fr) minmax(280px, 1.4fr) minmax(220px, 1fr) minmax(220px, 1fr);
+  gap: 14px;
+  margin-top: 14px;
+}
+
+.virtual-mic-grid > div {
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+}
+
+.debug-grid > div {
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+}
+
+.virtual-mic-grid p {
+  margin-top: 0;
+}
+
+.debug-grid p {
+  margin-top: 0;
+}
+
+.virtual-raw {
+  margin-top: 14px;
+}
+
+.debug-raw {
+  margin-top: 14px;
+}
+
+.live-led-meta {
+  display: grid;
+  gap: 6px;
+  justify-items: end;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.live-led-meta p {
+  margin: 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
 pre {
   margin: 0;
   max-height: 320px;
@@ -318,10 +510,15 @@ body[data-live-status="listening"] #liveStatusText {
   margin-bottom: 14px;
 }
 
+.serial-preview-head > div {
+  min-width: 0;
+}
+
 .serial-preview-head h2 {
   margin: 0;
   font-size: 22px;
   line-height: 1.2;
+  overflow-wrap: anywhere;
 }
 
 .led-preview {
@@ -331,6 +528,14 @@ body[data-live-status="listening"] #liveStatusText {
   overflow-x: auto;
   border-radius: 8px;
   background: #0f131a;
+}
+
+.led-line-preview {
+  grid-template-columns: repeat(12, minmax(18px, 1fr));
+  gap: 10px;
+  width: 100%;
+  max-width: 720px;
+  margin: 0 auto;
 }
 
 .led-row {
@@ -348,14 +553,130 @@ body[data-live-status="listening"] #liveStatusText {
   transition: background-color 80ms linear, box-shadow 80ms linear, opacity 80ms linear;
 }
 
+.led-line-dot {
+  width: 100%;
+  aspect-ratio: 1;
+  height: auto;
+  min-width: 18px;
+}
+
+.led-line-dot[data-side="left"] {
+  outline: 2px solid rgba(45, 160, 255, 0.45);
+}
+
+.led-line-dot[data-side="right"] {
+  outline: 2px solid rgba(255, 197, 71, 0.45);
+}
+
+.led-line-dot[data-side="both"] {
+  outline: 2px solid rgba(255, 255, 255, 0.56);
+}
+
+.arduino-preview {
+  --arduino-dot-size: 16px;
+  display: grid;
+  gap: 8px;
+  padding: 14px;
+  overflow-x: auto;
+  border-radius: 8px;
+  background: #0f131a;
+}
+
+.arduino-line {
+  display: grid;
+  grid-template-columns: 64px max-content;
+  align-items: center;
+  gap: 10px;
+  width: max-content;
+  min-width: max-content;
+}
+
+.arduino-line-label {
+  display: grid;
+  gap: 2px;
+  color: #eef5f2;
+  line-height: 1.1;
+}
+
+.arduino-line-label strong {
+  font-size: 13px;
+}
+
+.arduino-line-label span {
+  color: #aeb8c5;
+  font-size: 11px;
+}
+
+.arduino-line-dots {
+  display: grid;
+  gap: 6px;
+  align-items: center;
+}
+
+.arduino-dot {
+  width: var(--arduino-dot-size);
+  height: var(--arduino-dot-size);
+}
+
+.arduino-dot[data-side="left"] {
+  outline: 1px solid rgba(45, 160, 255, 0.3);
+}
+
+.arduino-dot[data-side="right"] {
+  outline: 1px solid rgba(255, 197, 71, 0.3);
+}
+
 @media (max-width: 760px) {
   .serial-layout,
-  .serial-preview-head {
+  .serial-preview-head,
+  .virtual-mic-head,
+  .debug-head {
     grid-template-columns: 1fr;
   }
 
-  .serial-preview-head {
+  .serial-preview-head,
+  .virtual-mic-head,
+  .debug-head {
     align-items: start;
     flex-direction: column;
+  }
+
+  .virtual-mic-actions,
+  .debug-actions,
+  .debug-control-group {
+    width: 100%;
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .debug-controls,
+  .virtual-mic-grid,
+  .debug-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .live-led-meta {
+    justify-items: start;
+  }
+
+  .serial-preview-head h2 {
+    width: 100%;
+    font-size: 20px;
+  }
+
+  .led-line-preview {
+    gap: 7px;
+  }
+
+  .arduino-line {
+    grid-template-columns: 54px max-content;
+  }
+
+  .arduino-line-dots {
+    gap: 4px;
+  }
+
+  .arduino-preview {
+    --arduino-dot-size: 9px;
   }
 }

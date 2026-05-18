@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Innerworld Voice Controller</title>
-    <link rel="stylesheet" href="./style.css">
+    <link rel="stylesheet" href="./style.css?v=debug-console">
   </head>
   <body>
     <main class="shell">
@@ -64,11 +64,137 @@
         </article>
       </section>
 
+      <section class="live-led-section">
+        <div class="serial-preview-head">
+          <div>
+            <p class="label">Live LED Preview</p>
+            <h2 id="controllerPreviewSummary">L 7/12 · R 7/12 · brightness 60%/60%</h2>
+          </div>
+          <div class="live-led-meta">
+            <p id="controllerValueSummary" class="mono">valence 0.000 / left 0.000 / right 0.000</p>
+            <p id="controllerPayload" class="mono">L v,0.000,0.000 · R v,0.000,0.000</p>
+          </div>
+        </div>
+        <div id="controllerLedPreview" class="led-preview led-line-preview" aria-label="Live LED preview"></div>
+      </section>
+
+      <section class="arduino-preview-section">
+        <div class="serial-preview-head">
+          <div>
+            <p class="label">Arduino Hardware Preview</p>
+            <h2 id="arduinoPreviewSummary">D2-D13 12 lines / sent 24 LEDs</h2>
+          </div>
+          <div class="live-led-meta">
+            <p id="arduinoPayload" class="mono">v,0.000,0.000 / L v,0.000,0.000 / R v,0.000,0.000</p>
+            <p id="arduinoTransform" class="mono">pleasantness 50% / energy 50% / intensity 30%</p>
+          </div>
+        </div>
+        <div id="arduinoHardwarePreview" class="arduino-preview" aria-label="Arduino hardware LED preview"></div>
+      </section>
+
+      <section class="virtual-mic-section" data-testid="virtual-mic-test">
+        <div class="virtual-mic-head">
+          <div>
+            <p class="label">Virtual Mic Test</p>
+            <h2>Left / Right Scenario</h2>
+          </div>
+          <div class="virtual-mic-actions">
+            <select id="virtualScenarioSelect" aria-label="Virtual mic scenario"></select>
+            <label class="virtual-readback-toggle">
+              <input id="virtualReadbackToggle" type="checkbox">
+              <span>TD readback</span>
+            </label>
+            <button id="virtualRunButton" type="button">Run</button>
+          </div>
+        </div>
+        <div class="virtual-mic-grid">
+          <div>
+            <p class="label">Status</p>
+            <p id="virtualStatusText" class="status compact">Virtual mic ready</p>
+          </div>
+          <div>
+            <p class="label">Expected</p>
+            <p id="virtualExpectedText">-</p>
+          </div>
+          <div>
+            <p class="label">Signals</p>
+            <p id="virtualSignalText" class="mono">left - / right - / valence -</p>
+          </div>
+        </div>
+        <pre id="virtualRaw" class="virtual-raw">{}</pre>
+      </section>
+
+      <section class="debug-section" data-testid="debug-console">
+        <div class="debug-head">
+          <div>
+            <p class="label">Debug Console</p>
+            <h2>E2E Controls</h2>
+          </div>
+          <div class="debug-actions">
+            <button id="debugSnapshotButton" type="button">Snapshot</button>
+            <button id="debugTdPingButton" type="button" class="secondary">TD Ping</button>
+            <button id="debugTdAuditButton" type="button" class="secondary">TD Audit</button>
+            <button id="debugReadbackButton" type="button" class="secondary">Readback</button>
+          </div>
+        </div>
+
+        <div class="debug-controls">
+          <div class="debug-control-group">
+            <label for="debugPatternSelect">OSC Pattern</label>
+            <select id="debugPatternSelect">
+              <option value="red_high">red/high</option>
+              <option value="yellow_high">yellow/high</option>
+              <option value="blue_low">blue/low</option>
+              <option value="green_low">green/low</option>
+              <option value="neutral">neutral</option>
+            </select>
+            <button id="debugOscButton" type="button">Send OSC</button>
+          </div>
+          <div class="debug-control-group">
+            <label for="debugValenceInput">Serial Valence</label>
+            <input id="debugValenceInput" type="number" min="-1" max="1" step="0.1" value="0">
+            <label for="debugArousalInput">Arousal</label>
+            <input id="debugArousalInput" type="number" min="-1" max="1" step="0.1" value="0">
+            <button id="debugSerialButton" type="button">Send Serial</button>
+          </div>
+          <div class="debug-control-group">
+            <label for="debugAudioDeviceSelect">Mic Device</label>
+            <select id="debugAudioDeviceSelect"></select>
+            <button id="debugAudioProbeButton" type="button">Probe Mic</button>
+          </div>
+        </div>
+
+        <div class="debug-grid">
+          <div>
+            <p class="label">Status</p>
+            <p id="debugStatusText" class="status compact">Debug ready</p>
+          </div>
+          <div>
+            <p class="label">TD Bridge</p>
+            <p id="debugBridgeText" class="mono">-</p>
+          </div>
+          <div>
+            <p class="label">OSC In</p>
+            <p id="debugOscReadbackText" class="mono">-</p>
+          </div>
+          <div>
+            <p class="label">Serial</p>
+            <p id="debugSerialText" class="mono">-</p>
+          </div>
+          <div>
+            <p class="label">Mic</p>
+            <p id="debugMicText" class="mono">-</p>
+          </div>
+        </div>
+        <pre id="debugRaw" class="debug-raw">{}</pre>
+      </section>
+
       <section class="log">
         <p class="label">Raw Result</p>
         <pre id="raw">{}</pre>
       </section>
     </main>
-    <script src="./app.js"></script>
+    <script src="./led_preview_model.js?v=linear-bidirectional-preview"></script>
+    <script src="./app.js?v=debug-console"></script>
   </body>
 </html>

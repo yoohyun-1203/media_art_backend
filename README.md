@@ -15,6 +15,7 @@
   - 느린 ambient/background average mood 계산용입니다. 아직 Gemini batch integration은 없습니다.
 - `web_app.py`
   - `send_composed_live_signal(...)`, live OSC test path, live endpoints를 제공합니다.
+  - Debug Console용 `/api/debug/*` endpoint를 제공합니다. 임의 shell command는 실행하지 않고, 고정된 TD/OSC/Serial/Mic 진단 동작만 노출합니다.
 - `main.py`
   - `get_gemini_client()` / `get_openai_client()`가 lazy client 생성으로 바뀌었습니다.
   - import 시점에 API client를 만들거나 missing API key로 종료하지 않습니다.
@@ -58,6 +59,28 @@ $env:MEDIA_ART_LOAD_DOTENV="0"
 
 ```text
 http://127.0.0.1:8765/
+```
+
+메인 화면의 `Debug Console`에서 다음 작업을 버튼으로 실행할 수 있습니다.
+
+- `Snapshot`: backend, live state, mic device list, TD bridge, OSC In CHOP, Serial DAT 상태를 한 번에 확인합니다.
+- `TD Ping` / `TD Audit`: `http://127.0.0.1:9988/td` bridge 응답과 `/project1` script/runtime issue를 확인합니다.
+- `Readback`: `/project1/oscin2` channel과 `/project1/serial1` params/rows를 읽습니다.
+- `Send OSC`: whitelisted pattern인 `red_high`, `yellow_high`, `blue_low`, `green_low`, `neutral`만 전송합니다.
+- `Send Serial`: TD bridge의 `serial_send`를 통해 `/project1/serial1`로 `v,<valence>,<arousal>` payload를 보냅니다.
+- `Probe Mic`: 선택한 Python audio input device를 짧게 열어 `rms`와 `peak`를 확인합니다.
+
+Debug Console API:
+
+```text
+GET  /api/debug/snapshot
+GET  /api/debug/audio-devices
+POST /api/debug/audio-probe
+POST /api/debug/td-ping
+POST /api/debug/td-audit
+POST /api/debug/td-readback
+POST /api/debug/osc-pattern
+POST /api/debug/serial-send
 ```
 
 Serial visualizer:
@@ -212,7 +235,7 @@ node --check web\arduino_simulator.js
 
 ```text
 .\venv311\Scripts\python.exe -m unittest discover -s tests -v
-Ran 41 tests ... OK
+Ran 52 tests ... OK
 
 .\venv311\Scripts\python.exe -m py_compile main.py web_app.py live_signal.py local_ser.py ambient_emotion.py
 OK / no output
@@ -225,6 +248,21 @@ OK / no output
 
 node --check web\arduino_simulator.js
 OK / no output
+```
+
+2026-05-17 Debug Console runtime 확인:
+
+```text
+GET /api/debug/snapshot
+ok=True
+td.ping.ok=True
+td.audit.issueCount=0
+/project1/oscin2: emotion/arousal_live, emotion/arousal_confidence, emotion/valence_target, emotion/valence_confidence visible
+/project1/serial1: COM6 / 115200
+mic input devices: 15
+
+POST /api/debug/audio-probe {"duration":0.2}
+device=0, frames=3200, rms=9.8713, peak=31.0
 ```
 
 TouchDesigner가 열려 있고 bridge가 살아 있으면 read-only로 확인합니다.

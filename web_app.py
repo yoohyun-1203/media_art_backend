@@ -1,27 +1,39 @@
-import concurrent.futures
 import json
 import os
 import threading
 import time
 import traceback
-import wave
-from datetime import datetime
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib import request as urlrequest
 
-import numpy as np
-
+import audio_io
 import main as backend
 from live_signal import compose_led_mood_signal
+from local_ser import LocalSerRuntime
+from mood_meter import clamp_mood_value, mood_payload
+from td_bridge_client import (
+    OSC_IN_PATH,
+    SERIAL_DAT_PATH,
+    TD_BRIDGE_URL,
+    read_touchdesigner_state,
+    td_bridge_action,
+    td_channels,
+)
+from tools import virtual_mic_scenarios
 
 
 HOST = "127.0.0.1"
 PORT = int(os.getenv("WEB_PORT", "8765"))
 ROOT = Path(__file__).resolve().parent
 WEB_ROOT = ROOT / "web"
-TD_BRIDGE_URL = os.getenv("TD_BRIDGE_URL", "http://127.0.0.1:9988/td")
-TD_BRIDGE_TIMEOUT = float(os.getenv("TD_BRIDGE_TIMEOUT", "0.8"))
+DEBUG_OSC_PATTERNS = {
+    "red_high": {"label": "red/high", "valence": -0.7, "arousal": 0.7},
+    "yellow_high": {"label": "yellow/high", "valence": 0.7, "arousal": 0.7},
+    "blue_low": {"label": "blue/low", "valence": -0.7, "arousal": -0.7},
+    "green_low": {"label": "green/low", "valence": 0.7, "arousal": -0.7},
+    "neutral": {"label": "neutral", "valence": 0.0, "arousal": 0.0},
+}
+local_ser_runtime = LocalSerRuntime(rate=backend.RATE, seconds=1.0)
 
 job_lock = threading.Lock()
 job_state = {
@@ -42,6 +54,19 @@ live_state = {
     "latest": None,
     "result": None,
     "error": None,
+}
+
+
+virtual_mic_lock = threading.Lock()
+virtual_mic_state = {
+    "running": False,
+    "status": "idle",
+    "message": "Virtual mic ready",
+    "latest": None,
+    "result": None,
+    "error": None,
+    "scenarios": virtual_mic_scenarios.scenario_catalog(),
+    "arousalMirrorStrategy": virtual_mic_scenarios.AROUSAL_MIRROR_STRATEGY,
 }
 
 
@@ -67,36 +92,142 @@ def get_live():
         return dict(live_state)
 
 
-def td_channels(path):
-    payload = json.dumps({"action": "channels", "path": path}).encode("utf-8")
-    req = urlrequest.Request(
-        TD_BRIDGE_URL,
-        data=payload,
-        headers={"Content-Type": "application/json"},
-        method="POST",
+def set_virtual_mic(**updates):
+    with virtual_mic_lock:
+        virtual_mic_state.update(updates)
+        return dict(virtual_mic_state)
+
+
+def get_virtual_mic():
+    with virtual_mic_lock:
+        return dict(virtual_mic_state)
+
+
+def run_virtual_mic_scenario(name, duration_scale=1.0, readback=False):
+    def on_frame(frame):
+        latest = virtual_mic_scenarios.frame_to_state(frame)
+        set_virtual_mic(
+            latest=latest,
+            message=f"Running {name}: t={latest['time']:.2f}s",
+        )
+
+    try:
+        set_virtual_mic(
+            running=True,
+            status="running",
+            message=f"Running {name}",
+            latest=None,
+            result=None,
+            error=None,
+        )
+        result = virtual_mic_scenarios.run_named_scenario(
+            name=name,
+            duration_scale=duration_scale,
+            readback=readback,
+            on_frame=on_frame,
+        )
+        set_virtual_mic(
+            running=False,
+            status="done",
+            message=f"Finished {name}",
+            result=result,
+            error=None,
+        )
+        return result
+    except Exception as exc:
+        set_virtual_mic(
+            running=False,
+            status="error",
+            message=f"Virtual mic failed: {exc}",
+            error=str(exc),
+        )
+        raise
+
+
+def run_debug_osc_pattern(name):
+    if name not in DEBUG_OSC_PATTERNS:
+        raise ValueError(f"unknown debug pattern: {name}")
+    pattern = DEBUG_OSC_PATTERNS[name]
+    valence, arousal, payload = mood_payload(pattern["valence"], pattern["arousal"])
+    backend.send_live_osc(
+        arousal_live=arousal,
+        arousal_confidence=1.0,
+        valence_target=valence,
+        valence_confidence=1.0,
+        text_final=f"debug:{name}",
     )
-    with urlrequest.urlopen(req, timeout=TD_BRIDGE_TIMEOUT) as response:
-        return json.loads(response.read().decode("utf-8"))
+    return {
+        "pattern": name,
+        "label": pattern["label"],
+        "valence": valence,
+        "arousal": arousal,
+        "payload": payload,
+    }
 
 
-def read_touchdesigner_state():
-    paths = [
-        "/project1/select2",
-        "/project1/select3",
-        "/project1/joy",
-        "/project1/sad",
-        "/project1/angry",
-        "/project1/relaxed",
-        "/project1/RGBs",
-        "/project1/oscin2",
-    ]
-    state = {}
-    for path in paths:
-        try:
-            state[path] = td_channels(path).get("channels", {})
-        except Exception as exc:
-            state[path] = {"error": str(exc)}
-    return state
+def run_debug_serial_send(valence, arousal):
+    safe_valence, safe_arousal, payload = mood_payload(valence, arousal)
+    response = td_bridge_action(
+        "serial_send",
+        path=SERIAL_DAT_PATH,
+        message=payload,
+    )
+    return {
+        "valence": safe_valence,
+        "arousal": safe_arousal,
+        "payload": payload,
+        "touchdesigner": response,
+    }
+
+
+def debug_call(label, callback):
+    started = time.time()
+    try:
+        return {
+            "ok": True,
+            "label": label,
+            "elapsedMs": round((time.time() - started) * 1000, 1),
+            "result": callback(),
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "label": label,
+            "elapsedMs": round((time.time() - started) * 1000, 1),
+            "error": str(exc),
+        }
+
+
+def list_audio_input_devices():
+    return audio_io.list_audio_input_devices(selected_device=backend.DEVICE)
+
+
+def probe_audio_input_device(device=None, duration=0.5):
+    return audio_io.probe_audio_input_device(device=device, duration=duration)
+
+
+def build_debug_snapshot():
+    return {
+        "ok": True,
+        "timestamp": time.time(),
+        "backend": {
+            "web": {"host": HOST, "port": PORT},
+            "osc": {"ip": backend.OSC_IP, "port": backend.OSC_PORT},
+            "touchdesignerBridge": TD_BRIDGE_URL,
+        },
+        "live": get_live(),
+        "job": get_job(),
+        "virtualMic": get_virtual_mic(),
+        "mic": debug_call("mic.devices", list_audio_input_devices),
+        "td": {
+            "ping": debug_call("td.ping", lambda: td_bridge_action("ping")),
+            "audit": debug_call("td.audit", lambda: td_bridge_action("audit", path="/project1", maxDepth=1)),
+            "oscin2": debug_call("td.oscin2", lambda: td_bridge_action("channels", path=OSC_IN_PATH)),
+            "serialParams": debug_call("td.serial.params", lambda: td_bridge_action("params", path=SERIAL_DAT_PATH)),
+            "serialRows": debug_call("td.serial.rows", lambda: td_bridge_action("dat_rows", path=SERIAL_DAT_PATH, maxRows=10)),
+        },
+        "patterns": DEBUG_OSC_PATTERNS,
+    }
 
 
 def analyze_worker():
@@ -206,72 +337,34 @@ def send_composed_live_signal(
     return signal
 
 
-def save_live_segment(frames):
-    if not frames:
-        return None
-    os.makedirs(backend.ARCHIVE_DIR, exist_ok=True)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-    filepath = os.path.join(backend.ARCHIVE_DIR, f"live_{timestamp}.wav")
-    audio_data = np.concatenate(frames, axis=0)
-    with wave.open(filepath, "wb") as wav_file:
-        wav_file.setnchannels(backend.CHANNELS)
-        wav_file.setsampwidth(2)
-        wav_file.setframerate(backend.RATE)
-        wav_file.writeframes(audio_data.tobytes())
-    return filepath
-
-
-def analyze_live_segment(filepath):
-    try:
-        set_live(status="analyzing", message="문장 끝을 감지했습니다. valence를 갱신하는 중입니다.")
-        result = backend.process_audio_result(filepath, send_osc=True)
-        if result.get("ok"):
-            valence_confidence = backend.estimate_valence_confidence(
-                result.get("transcript", ""),
-                result.get("valence", 0.0),
-            )
-            result["valence_confidence"] = valence_confidence
-            backend.send_live_osc(
-                valence_target=float(result.get("td_valence", result.get("valence", 0.0))),
-                valence_confidence=valence_confidence,
-                text_final=result.get("transcript", ""),
-            )
-            try:
-                backend.manage_archive_limit(backend.ARCHIVE_DIR, max_files=20)
-            except Exception:
-                pass
-            result["touchdesigner"] = read_touchdesigner_state()
-            if get_live().get("running"):
-                set_live(
-                    status="listening",
-                    message="valence 갱신 완료. 계속 듣는 중입니다.",
-                    result=result,
-                    error=None,
-                )
-            else:
-                set_live(status="stopped", message="실시간 정지됨", result=result, error=None)
-        else:
-            set_live(
-                status="listening" if get_live().get("running") else "stopped",
-                message="마지막 구간 분석에 실패했습니다. 계속 들을 수 있습니다.",
-                result=result,
-                error=result.get("error", "analysis_failed"),
-            )
-    except Exception as exc:
-        set_live(
-            status="error",
-            message="실시간 구간 분석 중 오류가 발생했습니다.",
-            result={"traceback": traceback.format_exc()},
-            error=str(exc),
-        )
+def process_live_audio_chunk(data, overflowed=False, now=None):
+    features = backend.compute_live_audio_features(data, rate=backend.RATE)
+    arousal_confidence = float(features.get("arousal_confidence", 0.0))
+    ser_result = local_ser_runtime.process(data, arousal_hint=features["arousal_live"])
+    ser_confidence = float(ser_result.get("confidence", 0.0))
+    signal = send_composed_live_signal(
+        arousal_live=features["arousal_live"],
+        arousal_confidence=arousal_confidence,
+        latest_valence=float(ser_result.get("valence", 0.0)),
+        latest_valence_confidence=ser_confidence,
+        ambient_valence=0.0,
+        ambient_arousal=0.0,
+        has_mic_activity=arousal_confidence > 0.0,
+    )
+    return {
+        **features,
+        "timestamp": time.time() if now is None else now,
+        "overflowed": bool(overflowed),
+        "valence_target": signal["valence"],
+        "valence_confidence": ser_confidence,
+        "ser_arousal": float(ser_result.get("arousal", features["arousal_live"])),
+        "ser_confidence": ser_confidence,
+        "ser_label": str(ser_result.get("label", "unknown")),
+        "serial_prefix": signal.get("serial_prefix", "v"),
+    }
 
 
 def live_worker():
-    frames = []
-    recording = False
-    silence_start_time = None
-    pending_analysis = None
-
     set_live(
         running=True,
         status="listening",
@@ -281,7 +374,6 @@ def live_worker():
         error=None,
     )
 
-    analysis_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
     stream = None
 
     try:
@@ -296,50 +388,12 @@ def live_worker():
 
         while not live_stop_event.is_set():
             data, overflowed = stream.read(backend.CHUNK)
-            now = time.time()
-            features = backend.compute_live_audio_features(data, rate=backend.RATE)
-            backend.send_live_osc(
-                arousal_live=features["arousal_live"],
-                arousal_confidence=features["arousal_confidence"],
-            )
-
-            latest = {
-                **features,
-                "timestamp": now,
-                "overflowed": bool(overflowed),
-            }
+            latest = process_live_audio_chunk(data, overflowed=overflowed)
             set_live(
                 latest=latest,
-                status="recording_segment" if recording else "listening",
-                message="음성 구간 수집 중입니다." if recording else "실시간 입력을 듣는 중입니다.",
+                status="listening",
+                message="실시간 입력을 듣는 중입니다.",
             )
-
-            if pending_analysis and pending_analysis.done():
-                try:
-                    pending_analysis.result()
-                finally:
-                    pending_analysis = None
-
-            volume = backend.analyze_audio_volume(data)
-            if backend.should_collect_live_segment(volume, features):
-                if not recording:
-                    frames = []
-                    recording = True
-                frames.append(data.copy())
-                silence_start_time = None
-            elif recording:
-                frames.append(data.copy())
-                if silence_start_time is None:
-                    silence_start_time = now
-                elif now - silence_start_time > backend.SILENCE_LIMIT:
-                    filepath = save_live_segment(frames)
-                    frames = []
-                    recording = False
-                    silence_start_time = None
-                    if filepath and pending_analysis is None:
-                        pending_analysis = analysis_executor.submit(analyze_live_segment, filepath)
-                    elif filepath:
-                        set_live(message="이전 문장 분석 중이라 이번 구간은 저장만 했습니다.")
 
         set_live(running=False, status="stopped", message="실시간 정지됨")
     except Exception as exc:
@@ -357,7 +411,6 @@ def live_worker():
                 stream.close()
             except Exception:
                 pass
-        analysis_executor.shutdown(wait=False, cancel_futures=True)
 
 
 def start_live():
@@ -392,12 +445,37 @@ class Handler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def read_json(self):
+        length = int(self.headers.get("Content-Length") or "0")
+        if length <= 0:
+            return {}
+        return json.loads(self.rfile.read(length).decode("utf-8"))
+
     def do_GET(self):
         if self.path == "/api/status":
             self.send_json(get_job())
             return
         if self.path == "/api/live/status":
             self.send_json(get_live())
+            return
+        if self.path == "/api/virtual-mic/status":
+            self.send_json(get_virtual_mic())
+            return
+        if self.path == "/api/virtual-mic/scenarios":
+            self.send_json({
+                "ok": True,
+                "scenarios": virtual_mic_scenarios.scenario_catalog(),
+                "arousalMirrorStrategy": virtual_mic_scenarios.AROUSAL_MIRROR_STRATEGY,
+            })
+            return
+        if self.path == "/api/debug/snapshot":
+            self.send_json(build_debug_snapshot())
+            return
+        if self.path == "/api/debug/audio-devices":
+            try:
+                self.send_json({"ok": True, "audio": list_audio_input_devices()})
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, status=500)
             return
         if self.path == "/api/health":
             self.send_json({
@@ -406,6 +484,7 @@ class Handler(SimpleHTTPRequestHandler):
                 "osc": {"ip": backend.OSC_IP, "port": backend.OSC_PORT},
                 "touchdesignerBridge": TD_BRIDGE_URL,
                 "live": get_live(),
+                "virtualMic": get_virtual_mic(),
             })
             return
         super().do_GET()
@@ -433,9 +512,88 @@ class Handler(SimpleHTTPRequestHandler):
             self.send_json({"ok": True, "state": stop_live()})
             return
 
+        if self.path == "/api/virtual-mic/run":
+            try:
+                body = self.read_json()
+                name = body.get("scenario") or "silence_baseline"
+                duration_scale = float(body.get("durationScale", 1.0))
+                readback = bool(body.get("readback", False))
+                state = get_virtual_mic()
+                if state.get("running"):
+                    self.send_json({"ok": False, "error": "already_running", "state": state}, status=409)
+                    return
+                thread = threading.Thread(
+                    target=run_virtual_mic_scenario,
+                    args=(name, duration_scale, readback),
+                    daemon=True,
+                )
+                thread.start()
+                self.send_json({"ok": True, "state": get_virtual_mic()})
+            except KeyError as exc:
+                self.send_json({"ok": False, "error": str(exc)}, status=400)
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, status=500)
+            return
+
         if self.path == "/api/test-osc":
             try:
                 self.send_json({"ok": True, "result": run_test_osc()})
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, status=500)
+            return
+
+        if self.path == "/api/debug/td-ping":
+            try:
+                self.send_json({"ok": True, "result": td_bridge_action("ping")})
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, status=500)
+            return
+
+        if self.path == "/api/debug/td-audit":
+            try:
+                self.send_json({"ok": True, "result": td_bridge_action("audit", path="/project1", maxDepth=1)})
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, status=500)
+            return
+
+        if self.path == "/api/debug/td-readback":
+            try:
+                self.send_json({"ok": True, "result": {
+                    "oscin2": debug_call("td.oscin2", lambda: td_bridge_action("channels", path=OSC_IN_PATH)),
+                    "serialParams": debug_call("td.serial.params", lambda: td_bridge_action("params", path=SERIAL_DAT_PATH)),
+                    "serialRows": debug_call("td.serial.rows", lambda: td_bridge_action("dat_rows", path=SERIAL_DAT_PATH, maxRows=10)),
+                }})
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, status=500)
+            return
+
+        if self.path == "/api/debug/osc-pattern":
+            try:
+                body = self.read_json()
+                self.send_json({"ok": True, "result": run_debug_osc_pattern(body.get("pattern", "neutral"))})
+            except ValueError as exc:
+                self.send_json({"ok": False, "error": str(exc)}, status=400)
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, status=500)
+            return
+
+        if self.path == "/api/debug/serial-send":
+            try:
+                body = self.read_json()
+                self.send_json({"ok": True, "result": run_debug_serial_send(body.get("valence", 0.0), body.get("arousal", 0.0))})
+            except ValueError as exc:
+                self.send_json({"ok": False, "error": str(exc)}, status=400)
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, status=500)
+            return
+
+        if self.path == "/api/debug/audio-probe":
+            try:
+                body = self.read_json()
+                self.send_json({"ok": True, "result": probe_audio_input_device(
+                    device=body.get("device"),
+                    duration=body.get("duration", 0.5),
+                )})
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, status=500)
             return
