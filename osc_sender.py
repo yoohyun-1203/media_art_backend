@@ -24,14 +24,34 @@ osc_client = LazyOscClient(OSC_IP, OSC_PORT)
 def send_live_osc(
     arousal_live=None,
     arousal_confidence=None,
+    left_arousal_live=None,
+    right_arousal_live=None,
+    left_arousal_confidence=None,
+    right_arousal_confidence=None,
     valence_target=None,
     valence_confidence=None,
     text_partial=None,
     text_final=None,
 ):
+    if arousal_live is None:
+        live_values = [value for value in (left_arousal_live, right_arousal_live) if value is not None]
+        if live_values:
+            arousal_live = max(live_values)
+    if arousal_confidence is None:
+        confidence_values = [
+            value for value in (left_arousal_confidence, right_arousal_confidence)
+            if value is not None
+        ]
+        if confidence_values:
+            arousal_confidence = max(confidence_values)
+
     values = {
         "/emotion/arousal_live": arousal_live,
         "/emotion/arousal_confidence": arousal_confidence,
+        "/emotion/left_arousal_live": left_arousal_live,
+        "/emotion/right_arousal_live": right_arousal_live,
+        "/emotion/left_arousal_confidence": left_arousal_confidence,
+        "/emotion/right_arousal_confidence": right_arousal_confidence,
         "/emotion/valence_target": valence_target,
         "/emotion/valence_confidence": valence_confidence,
         "/emotion/arousal": arousal_live,

@@ -35,6 +35,18 @@ class LiveAudioFeatureTests(unittest.TestCase):
         self.assertGreaterEqual(loud_result["arousal_live"], -1.0)
         self.assertLessEqual(loud_result["arousal_live"], 1.0)
 
+    def test_dual_live_audio_features_keep_left_and_right_separate(self):
+        quiet_left = np.zeros((1024, 1), dtype=np.int16)
+        loud_right = (np.sin(np.linspace(0, np.pi * 16, 1024)) * 12000).astype(np.int16).reshape(-1, 1)
+
+        result = main.compute_dual_live_audio_features(quiet_left, loud_right, rate=16000)
+
+        self.assertLess(result["left_arousal_live"], -0.8)
+        self.assertGreater(result["right_arousal_live"], result["left_arousal_live"])
+        self.assertGreater(result["right_arousal_confidence"], 0.5)
+        self.assertEqual(result["arousal_live"], result["right_arousal_live"])
+        self.assertEqual(result["arousal_confidence"], result["right_arousal_confidence"])
+
     def test_tiny_int16_noise_is_still_treated_as_quiet(self):
         samples = np.ones((1024, 1), dtype=np.int16)
 
@@ -42,6 +54,15 @@ class LiveAudioFeatureTests(unittest.TestCase):
 
         self.assertLess(result["arousal_confidence"], 0.05)
         self.assertLess(result["rms"], 0.001)
+
+    def test_signal_below_noise_gate_db_has_zero_confidence(self):
+        gate_rms = 10 ** (main.NOISE_GATE_DB / 20.0)
+        samples = np.full((1024, 1), gate_rms * 0.9, dtype=np.float32)
+
+        result = main.compute_live_audio_features(samples, rate=16000)
+
+        self.assertEqual(result["arousal_confidence"], 0.0)
+        self.assertLess(result["rms_db"], main.NOISE_GATE_DB)
 
     def test_live_segment_requires_volume_and_confidence(self):
         quiet_features = {"arousal_confidence": 0.0}
@@ -77,6 +98,26 @@ class LiveAudioFeatureTests(unittest.TestCase):
         send_message.assert_any_call("/emotion/valence_confidence", 0.6)
         send_message.assert_any_call("/emotion/arousal", 0.35)
         send_message.assert_any_call("/emotion/valence", -0.45)
+
+    def test_send_live_osc_sends_left_right_channels_and_mirrors_max_arousal(self):
+        with mock.patch.object(main.osc_client, "send_message") as send_message:
+            main.send_live_osc(
+                left_arousal_live=-0.4,
+                right_arousal_live=0.65,
+                left_arousal_confidence=0.1,
+                right_arousal_confidence=0.8,
+                valence_target=0.2,
+                valence_confidence=0.5,
+            )
+
+        send_message.assert_any_call("/emotion/left_arousal_live", -0.4)
+        send_message.assert_any_call("/emotion/right_arousal_live", 0.65)
+        send_message.assert_any_call("/emotion/left_arousal_confidence", 0.1)
+        send_message.assert_any_call("/emotion/right_arousal_confidence", 0.8)
+        send_message.assert_any_call("/emotion/arousal_live", 0.65)
+        send_message.assert_any_call("/emotion/arousal_confidence", 0.8)
+        send_message.assert_any_call("/emotion/arousal", 0.65)
+        send_message.assert_any_call("/emotion/valence", 0.2)
 
     def test_import_does_not_initialize_ai_clients(self):
         env = os.environ.copy()

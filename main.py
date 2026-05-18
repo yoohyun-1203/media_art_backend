@@ -10,10 +10,11 @@ from audio_io import manage_archive_limit, record_audio, sd
 from audio_processing import (
     analyze_arousal,
     analyze_audio_volume,
+    compute_dual_live_audio_features,
     compute_live_audio_features,
     should_collect_live_segment,
 )
-from config import ARCHIVE_DIR, CHANNELS, CHUNK, DEVICE, OSC_IP, OSC_PORT, RATE, SILENCE_LIMIT, THRESHOLD
+from config import ARCHIVE_DIR, CHANNELS, CHUNK, DEVICE, LEFT_DEVICE, NOISE_GATE_DB, OSC_IP, OSC_PORT, RATE, RIGHT_DEVICE, SILENCE_LIMIT, THRESHOLD
 from mood_meter import MOOD_METER_GRID, clamp, find_word_in_grid, map_touchdesigner_values
 from osc_sender import osc_client, send_emotion_osc, send_live_osc
 

@@ -151,6 +151,50 @@ class LiveSignalCompositionTests(unittest.TestCase):
         self.assertEqual(result["ser_label"], "tense")
         self.assertEqual(result["ser_arousal"], -0.2)
 
+    def test_dual_live_audio_chunk_sends_left_and_right_arousal_separately(self):
+        features = {
+            "left_arousal_live": -0.3,
+            "right_arousal_live": 0.7,
+            "left_arousal_confidence": 0.2,
+            "right_arousal_confidence": 0.8,
+            "left_rms": 0.01,
+            "right_rms": 0.08,
+            "arousal_live": 0.7,
+            "arousal_confidence": 0.8,
+        }
+        ser_result = {
+            "valence": 0.25,
+            "arousal": 0.1,
+            "confidence": 0.6,
+            "label": "engaged",
+        }
+        signal = {"serial_prefix": "v", "valence": 0.25, "arousal": 0.7}
+        fake_ser_runtime = mock.Mock()
+        fake_ser_runtime.process.return_value = ser_result
+
+        with mock.patch.object(web_app.backend, "compute_dual_live_audio_features", return_value=features) as compute_features, \
+             mock.patch.object(web_app, "local_ser_runtime", fake_ser_runtime), \
+             mock.patch.object(web_app, "compose_led_mood_signal", return_value=signal), \
+             mock.patch.object(web_app.backend, "send_live_osc") as send_live_osc:
+            result = web_app.process_dual_live_audio_chunk("left audio", "right audio", overflowed=True, now=123.5)
+
+        compute_features.assert_called_once_with("left audio", "right audio", rate=web_app.backend.RATE)
+        fake_ser_runtime.process.assert_called_once_with("right audio", arousal_hint=0.7)
+        send_live_osc.assert_called_once_with(
+            arousal_live=0.7,
+            arousal_confidence=0.8,
+            left_arousal_live=-0.3,
+            right_arousal_live=0.7,
+            left_arousal_confidence=0.2,
+            right_arousal_confidence=0.8,
+            valence_target=0.25,
+            valence_confidence=0.6,
+        )
+        self.assertTrue(result["overflowed"])
+        self.assertEqual(result["left_arousal_live"], -0.3)
+        self.assertEqual(result["right_arousal_live"], 0.7)
+        self.assertEqual(result["valence_target"], 0.25)
+
 
 class VirtualMicWebTests(unittest.TestCase):
     def test_run_virtual_mic_scenario_updates_latest_frame_and_result(self):

@@ -1,7 +1,19 @@
 import numpy as np
 
-from config import RATE, THRESHOLD
+from config import NOISE_GATE_DB, RATE, THRESHOLD
 from mood_meter import clamp
+
+
+MIN_RMS_FOR_DB = 1e-9
+CONFIDENCE_RMS_RANGE = 0.08
+
+
+def _rms_to_dbfs(rms):
+    return float(20.0 * np.log10(max(float(rms), MIN_RMS_FOR_DB)))
+
+
+def _dbfs_to_rms(dbfs):
+    return float(10.0 ** (float(dbfs) / 20.0))
 
 
 def analyze_audio_volume(data):
@@ -51,14 +63,45 @@ def compute_live_audio_features(data, rate=RATE):
     norm_centroid = clamp(spectral_centroid / 3000.0, 0.0, 1.0)
     arousal_raw = (norm_energy * 0.6) + (norm_zcr * 0.2) + (norm_centroid * 0.2)
     arousal_live = clamp((arousal_raw * 2.0) - 1.0)
-    arousal_confidence = clamp((rms - 0.01) / 0.08, 0.0, 1.0)
+    rms_db = _rms_to_dbfs(rms)
+    noise_gate_rms = _dbfs_to_rms(NOISE_GATE_DB)
+    arousal_confidence = clamp(
+        (rms - noise_gate_rms) / CONFIDENCE_RMS_RANGE,
+        0.0,
+        1.0,
+    )
 
     return {
         "arousal_live": arousal_live,
         "arousal_confidence": arousal_confidence,
         "rms": rms,
+        "rms_db": rms_db,
         "zcr": zcr,
         "spectral_centroid": spectral_centroid,
+    }
+
+
+def compute_dual_live_audio_features(left_data, right_data, rate=RATE):
+    left = compute_live_audio_features(left_data, rate=rate)
+    right = compute_live_audio_features(right_data, rate=rate)
+    arousal_live = max(left["arousal_live"], right["arousal_live"])
+    arousal_confidence = max(left["arousal_confidence"], right["arousal_confidence"])
+
+    return {
+        "left_arousal_live": left["arousal_live"],
+        "right_arousal_live": right["arousal_live"],
+        "left_arousal_confidence": left["arousal_confidence"],
+        "right_arousal_confidence": right["arousal_confidence"],
+        "left_rms": left["rms"],
+        "right_rms": right["rms"],
+        "left_rms_db": left["rms_db"],
+        "right_rms_db": right["rms_db"],
+        "left_zcr": left["zcr"],
+        "right_zcr": right["zcr"],
+        "left_spectral_centroid": left["spectral_centroid"],
+        "right_spectral_centroid": right["spectral_centroid"],
+        "arousal_live": arousal_live,
+        "arousal_confidence": arousal_confidence,
     }
 
 

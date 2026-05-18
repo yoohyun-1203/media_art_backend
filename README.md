@@ -55,6 +55,22 @@ $env:MEDIA_ART_LOAD_DOTENV="0"
 .\venv311\Scripts\python.exe web_app.py
 ```
 
+서로 다른 두 input device를 왼쪽/오른쪽 마이크로 쓸 때는 서버 실행 전에 device index를 지정합니다. `GET /api/debug/audio-devices`에서 index를 확인한 뒤 설정합니다.
+
+예:
+
+```powershell
+$env:AUDIO_LEFT_DEVICE="1"
+$env:AUDIO_RIGHT_DEVICE="23"
+$env:AUDIO_RATE="48000"
+$env:AUDIO_NOISE_GATE_DB="-32"
+.\venv311\Scripts\python.exe web_app.py
+```
+
+이 모드에서는 각 device를 `channels=1`로 열고, 왼쪽 마이크는 left speaker용 OSC channel, 오른쪽 마이크는 right speaker용 OSC channel로 따로 보냅니다. 두 값 중 큰 arousal은 기존 호환용 `/emotion/arousal_live`와 `/emotion/arousal`에도 mirror됩니다.
+
+`AUDIO_NOISE_GATE_DB`는 live mic confidence가 열리기 시작하는 dBFS 기준입니다. 기본값은 `-32`이고, 값을 덜 음수로 올리면 더 큰 소리에서만 speaker/TD 반응이 열립니다.
+
 브라우저에서 엽니다.
 
 ```text
@@ -154,6 +170,10 @@ AudioWAV/1001_DFA_SAD_XX.wav,sad,crema-d
 ```text
 /emotion/arousal_live
 /emotion/arousal_confidence
+/emotion/left_arousal_live
+/emotion/right_arousal_live
+/emotion/left_arousal_confidence
+/emotion/right_arousal_confidence
 /emotion/valence_target
 /emotion/valence_confidence
 ```
@@ -171,6 +191,8 @@ legacy channel도 함께 남아 있습니다.
 
 - `arousal_live`: sound intensity, pitch, waveform 기반 즉시 반응. pattern speed, displacement, blur, brightness 등에 연결합니다.
 - `arousal_confidence`: `arousal_live` 영향력의 gain/blend weight로 사용합니다.
+- `left_arousal_live` / `left_arousal_confidence`: 왼쪽 input device에 할당된 마이크 반응입니다. 왼쪽 speaker 또는 왼쪽 LED/pattern branch에 연결합니다.
+- `right_arousal_live` / `right_arousal_confidence`: 오른쪽 input device에 할당된 마이크 반응입니다. 오른쪽 speaker 또는 오른쪽 LED/pattern branch에 연결합니다.
 - `valence_target`: 느린 색상/분위기 목표값으로 사용합니다.
 - `valence_confidence`: valence 반영 강도를 조절합니다.
 

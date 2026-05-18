@@ -199,11 +199,38 @@ def debug_call(label, callback):
 
 
 def list_audio_input_devices():
-    return audio_io.list_audio_input_devices(selected_device=backend.DEVICE)
+    result = audio_io.list_audio_input_devices(selected_device=backend.DEVICE)
+    result["liveInput"] = live_input_config()
+    return result
 
 
 def probe_audio_input_device(device=None, duration=0.5):
     return audio_io.probe_audio_input_device(device=device, duration=duration)
+
+
+def using_dual_input_devices():
+    return backend.LEFT_DEVICE is not None and backend.RIGHT_DEVICE is not None
+
+
+def live_input_config():
+    if using_dual_input_devices():
+        return {
+            "mode": "dual_devices",
+            "leftDevice": backend.LEFT_DEVICE,
+            "rightDevice": backend.RIGHT_DEVICE,
+            "channelsPerDevice": 1,
+            "rate": backend.RATE,
+            "chunk": backend.CHUNK,
+            "noiseGateDb": backend.NOISE_GATE_DB,
+        }
+    return {
+        "mode": "single_device",
+        "device": backend.DEVICE,
+        "channels": backend.CHANNELS,
+        "rate": backend.RATE,
+        "chunk": backend.CHUNK,
+        "noiseGateDb": backend.NOISE_GATE_DB,
+    }
 
 
 def build_debug_snapshot():
@@ -214,6 +241,7 @@ def build_debug_snapshot():
             "web": {"host": HOST, "port": PORT},
             "osc": {"ip": backend.OSC_IP, "port": backend.OSC_PORT},
             "touchdesignerBridge": TD_BRIDGE_URL,
+            "liveInput": live_input_config(),
         },
         "live": get_live(),
         "job": get_job(),
@@ -364,6 +392,49 @@ def process_live_audio_chunk(data, overflowed=False, now=None):
     }
 
 
+def process_dual_live_audio_chunk(left_data, right_data, overflowed=False, now=None):
+    features = backend.compute_dual_live_audio_features(left_data, right_data, rate=backend.RATE)
+    arousal_confidence = float(features.get("arousal_confidence", 0.0))
+    primary_data = left_data
+    if float(features["right_arousal_live"]) > float(features["left_arousal_live"]):
+        primary_data = right_data
+    ser_result = local_ser_runtime.process(primary_data, arousal_hint=features["arousal_live"])
+    ser_confidence = float(ser_result.get("confidence", 0.0))
+    signal = compose_led_mood_signal(
+        arousal_live=features["arousal_live"],
+        arousal_confidence=arousal_confidence,
+        latest_valence=float(ser_result.get("valence", 0.0)),
+        latest_valence_confidence=ser_confidence,
+        ambient_valence=0.0,
+        ambient_arousal=0.0,
+        has_mic_activity=arousal_confidence > 0.0,
+    )
+    backend.send_live_osc(
+        arousal_live=signal["arousal"],
+        arousal_confidence=arousal_confidence,
+        left_arousal_live=features["left_arousal_live"],
+        right_arousal_live=features["right_arousal_live"],
+        left_arousal_confidence=features["left_arousal_confidence"],
+        right_arousal_confidence=features["right_arousal_confidence"],
+        valence_target=signal["valence"],
+        valence_confidence=ser_confidence,
+    )
+    return {
+        **features,
+        "timestamp": time.time() if now is None else now,
+        "overflowed": bool(overflowed),
+        "valence_target": signal["valence"],
+        "valence_confidence": ser_confidence,
+        "ser_arousal": float(ser_result.get("arousal", features["arousal_live"])),
+        "ser_confidence": ser_confidence,
+        "ser_label": str(ser_result.get("label", "unknown")),
+        "serial_prefix": signal.get("serial_prefix", "v"),
+        "live_input_mode": "dual_devices",
+        "left_device": backend.LEFT_DEVICE,
+        "right_device": backend.RIGHT_DEVICE,
+    }
+
+
 def live_worker():
     set_live(
         running=True,
@@ -375,25 +446,59 @@ def live_worker():
     )
 
     stream = None
+    streams = []
 
     try:
-        stream = backend.sd.InputStream(
-            device=backend.DEVICE,
-            samplerate=backend.RATE,
-            channels=backend.CHANNELS,
-            dtype="int16",
-            blocksize=backend.CHUNK,
-        )
-        stream.start()
-
-        while not live_stop_event.is_set():
-            data, overflowed = stream.read(backend.CHUNK)
-            latest = process_live_audio_chunk(data, overflowed=overflowed)
-            set_live(
-                latest=latest,
-                status="listening",
-                message="실시간 입력을 듣는 중입니다.",
+        if using_dual_input_devices():
+            left_stream = backend.sd.InputStream(
+                device=backend.LEFT_DEVICE,
+                samplerate=backend.RATE,
+                channels=1,
+                dtype="int16",
+                blocksize=backend.CHUNK,
             )
+            right_stream = backend.sd.InputStream(
+                device=backend.RIGHT_DEVICE,
+                samplerate=backend.RATE,
+                channels=1,
+                dtype="int16",
+                blocksize=backend.CHUNK,
+            )
+            streams = [left_stream, right_stream]
+            for active_stream in streams:
+                active_stream.start()
+
+            while not live_stop_event.is_set():
+                left_data, left_overflowed = left_stream.read(backend.CHUNK)
+                right_data, right_overflowed = right_stream.read(backend.CHUNK)
+                latest = process_dual_live_audio_chunk(
+                    left_data,
+                    right_data,
+                    overflowed=left_overflowed or right_overflowed,
+                )
+                set_live(
+                    latest=latest,
+                    status="listening",
+                    message="실시간 입력을 듣는 중입니다.",
+                )
+        else:
+            stream = backend.sd.InputStream(
+                device=backend.DEVICE,
+                samplerate=backend.RATE,
+                channels=backend.CHANNELS,
+                dtype="int16",
+                blocksize=backend.CHUNK,
+            )
+            stream.start()
+
+            while not live_stop_event.is_set():
+                data, overflowed = stream.read(backend.CHUNK)
+                latest = process_live_audio_chunk(data, overflowed=overflowed)
+                set_live(
+                    latest=latest,
+                    status="listening",
+                    message="실시간 입력을 듣는 중입니다.",
+                )
 
         set_live(running=False, status="stopped", message="실시간 정지됨")
     except Exception as exc:
@@ -405,6 +510,12 @@ def live_worker():
             result={"traceback": traceback.format_exc()},
         )
     finally:
+        for active_stream in streams:
+            try:
+                active_stream.stop()
+                active_stream.close()
+            except Exception:
+                pass
         if stream is not None:
             try:
                 stream.stop()
@@ -483,6 +594,7 @@ class Handler(SimpleHTTPRequestHandler):
                 "backend": "media_art_backend",
                 "osc": {"ip": backend.OSC_IP, "port": backend.OSC_PORT},
                 "touchdesignerBridge": TD_BRIDGE_URL,
+                "liveInput": live_input_config(),
                 "live": get_live(),
                 "virtualMic": get_virtual_mic(),
             })
