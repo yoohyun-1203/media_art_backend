@@ -90,6 +90,8 @@ class LiveSignalCompositionTests(unittest.TestCase):
         with mock.patch.object(web_app.backend, "compute_live_audio_features", return_value=features) as compute_features, \
              mock.patch.object(web_app.live_valence_tracker, "update", return_value={"valence": 0.0, "confidence": 0.0, "event": "start", "committed": False}) as update_valence, \
              mock.patch.object(web_app.voice_baseline, "update", return_value={"rms_baseline": 0.02, "relative_level": 2.0, "relative_arousal": 0.2}) as update_baseline, \
+             mock.patch.object(web_app, "update_visitor_memory", return_value={"valence": 0.0, "arousal": 0.0}), \
+             mock.patch.object(web_app, "visitor_valence_bias", return_value=0.0), \
              mock.patch.object(web_app, "smooth_td_arousal", return_value=0.21) as smooth_td_arousal, \
              mock.patch.object(web_app, "send_composed_live_signal", return_value=signal) as send_composed_live_signal, \
              mock.patch.object(web_app.backend, "process_audio_result") as process_audio_result:
@@ -144,6 +146,8 @@ class LiveSignalCompositionTests(unittest.TestCase):
              mock.patch.object(web_app, "local_ser_runtime", fake_ser_runtime), \
              mock.patch.object(web_app.live_valence_tracker, "update", return_value={"valence": -0.6, "confidence": 0.75, "event": "continue", "committed": False}), \
              mock.patch.object(web_app.voice_baseline, "update", return_value={"rms_baseline": 0.02, "relative_level": 2.0, "relative_arousal": 0.2}), \
+             mock.patch.object(web_app, "update_visitor_memory", return_value={"valence": 0.0, "arousal": 0.0}), \
+             mock.patch.object(web_app, "visitor_valence_bias", return_value=0.0), \
              mock.patch.object(web_app, "smooth_td_arousal", return_value=0.21), \
              mock.patch.object(web_app, "send_composed_live_signal", return_value=signal) as send_composed_live_signal, \
              mock.patch.object(web_app.backend, "process_audio_result") as process_audio_result:
@@ -193,6 +197,8 @@ class LiveSignalCompositionTests(unittest.TestCase):
              mock.patch.object(web_app, "local_ser_runtime", fake_ser_runtime), \
              mock.patch.object(web_app.live_valence_tracker, "update", return_value={"valence": 0.25, "confidence": 0.6, "event": "continue", "committed": False}), \
              mock.patch.object(web_app.voice_baseline, "update", return_value={"rms_baseline": 0.02, "relative_level": 2.0, "relative_arousal": 0.2}), \
+             mock.patch.object(web_app, "update_visitor_memory", return_value={"valence": 0.0, "arousal": 0.0}), \
+             mock.patch.object(web_app, "visitor_valence_bias", return_value=0.0), \
              mock.patch.object(web_app, "smooth_td_arousal", return_value=0.35), \
              mock.patch.object(web_app, "compose_led_mood_signal", return_value=signal), \
              mock.patch.object(web_app.backend, "send_live_osc") as send_live_osc:
@@ -314,8 +320,24 @@ class EvaluationTests(unittest.TestCase):
     def setUp(self):
         with web_app.evaluation_lock:
             web_app.evaluation_samples.clear()
+        self._old_parent_memory_path = web_app.PARENT_MEMORY_PATH
+        self._old_visitor_memory_path = web_app.VISITOR_MEMORY_PATH
+        web_app.PARENT_MEMORY_PATH = web_app.ROOT / "memory" / ".test_parent_memory.json"
+        web_app.VISITOR_MEMORY_PATH = web_app.ROOT / "memory" / ".test_visitor_memory.json"
         if web_app.PARENT_MEMORY_PATH.exists():
             web_app.PARENT_MEMORY_PATH.unlink()
+        if web_app.VISITOR_MEMORY_PATH.exists():
+            web_app.VISITOR_MEMORY_PATH.unlink()
+        web_app.visitor_valence_smoother.value = 0.0
+        web_app.last_visitor_memory_at = 0.0
+
+    def tearDown(self):
+        if web_app.PARENT_MEMORY_PATH.exists():
+            web_app.PARENT_MEMORY_PATH.unlink()
+        if web_app.VISITOR_MEMORY_PATH.exists():
+            web_app.VISITOR_MEMORY_PATH.unlink()
+        web_app.PARENT_MEMORY_PATH = self._old_parent_memory_path
+        web_app.VISITOR_MEMORY_PATH = self._old_visitor_memory_path
 
     def test_record_evaluation_sample_compares_latest_prediction(self):
         with mock.patch.object(web_app, "get_live", return_value={"latest": {
@@ -355,6 +377,63 @@ class EvaluationTests(unittest.TestCase):
         self.assertEqual(summary["count"], 1)
         self.assertEqual(summary["byLabel"]["ang"], 1)
         self.assertTrue(web_app.PARENT_MEMORY_PATH.exists())
+
+    def test_parent_bias_learns_predicted_to_expected_direction(self):
+        with mock.patch.object(web_app, "get_live", return_value={"latest": {
+            "ser_label": "sad",
+            "valence_target": 0.0,
+            "ser_confidence": 0.9,
+            "arousal_live": 0.2,
+        }}):
+            for _index in range(4):
+                web_app.record_parent_sample("hap", speaker="team")
+
+        biased = web_app.apply_parent_bias({"label": "sad", "valence": -0.7})
+
+        self.assertGreater(biased["valence"], -0.7)
+        self.assertGreater(biased["parent_bias_strength"], 0.0)
+
+    def test_update_visitor_memory_accumulates_slow_mood(self):
+        first = web_app.update_visitor_memory(
+            {"label": "hap", "valence": 0.8, "confidence": 1.0},
+            arousal_live=0.6,
+            arousal_confidence=0.8,
+            now=100.0,
+        )
+        second = web_app.update_visitor_memory(
+            {"label": "hap", "valence": 0.8, "confidence": 1.0},
+            arousal_live=0.6,
+            arousal_confidence=0.8,
+            now=101.0,
+        )
+
+        self.assertGreater(second["valence"], first["valence"])
+        self.assertLess(second["valence"], 0.1)
+        self.assertTrue(web_app.VISITOR_MEMORY_PATH.exists())
+
+    def test_update_visitor_memory_ignores_low_confidence_or_too_frequent_chunks(self):
+        web_app.update_visitor_memory(
+            {"label": "hap", "valence": 0.8, "confidence": 0.3},
+            arousal_live=0.6,
+            arousal_confidence=0.8,
+            now=100.0,
+        )
+        web_app.update_visitor_memory(
+            {"label": "hap", "valence": 0.8, "confidence": 1.0},
+            arousal_live=0.6,
+            arousal_confidence=0.8,
+            now=100.1,
+        )
+        web_app.update_visitor_memory(
+            {"label": "sad", "valence": -0.7, "confidence": 1.0},
+            arousal_live=0.6,
+            arousal_confidence=0.8,
+            now=100.2,
+        )
+
+        summary = web_app.visitor_memory_summary()
+
+        self.assertEqual(summary["count"], 1)
 
 
 if __name__ == "__main__":

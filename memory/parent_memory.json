@@ -1,16 +1,36 @@
 {
   "version": 1,
-  "updated_at": 1779201674.060139,
+  "updated_at": 1779203331.838155,
   "samples": [
     {
-      "timestamp": 1779201674.060135,
-      "expected_label": "ang",
-      "predicted_label": "ang",
-      "valence_live": -0.8,
-      "ser_confidence": 0.9,
-      "arousal_live": 0.5,
+      "timestamp": 1779203317.646903,
+      "expected_label": "neu",
+      "predicted_label": "neu",
+      "valence_live": 0.042067280170684354,
+      "ser_confidence": 0.654110312461853,
+      "arousal_live": -0.41850304132709304,
       "correct": true,
-      "speaker": "yoohyun"
+      "speaker": "team"
+    },
+    {
+      "timestamp": 1779203324.4357529,
+      "expected_label": "hap",
+      "predicted_label": "neu",
+      "valence_live": 0.05382450561813506,
+      "ser_confidence": 0.8332712054252625,
+      "arousal_live": -0.40776004010581424,
+      "correct": false,
+      "speaker": "team"
+    },
+    {
+      "timestamp": 1779203331.8380458,
+      "expected_label": "ang",
+      "predicted_label": "neu",
+      "valence_live": 0.05382450561813506,
+      "ser_confidence": 0.9802320003509521,
+      "arousal_live": -0.3517722749153982,
+      "correct": false,
+      "speaker": "team"
     }
   ]
 }

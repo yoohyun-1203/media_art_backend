@@ -59,6 +59,8 @@ const parentSummary = document.querySelector("#parentSummary");
 const parentList = document.querySelector("#parentList");
 const parentButtons = document.querySelectorAll("[data-parent-label]");
 const parentSpeakerInput = document.querySelector("#parentSpeakerInput");
+const visitorSummary = document.querySelector("#visitorSummary");
+const visitorList = document.querySelector("#visitorList");
 
 let pollTimer = null;
 let livePollTimer = null;
@@ -264,6 +266,21 @@ function renderParentMemory(payload) {
   }
 }
 
+function renderVisitorMemory(payload) {
+  if (!visitorSummary || !visitorList) {
+    return;
+  }
+  const mood = payload.mood || {};
+  visitorSummary.textContent = `${payload.count || 0} visitor samples / mood val ${fmt(mood.valence)} / ar ${fmt(mood.arousal)}`;
+  visitorList.innerHTML = "";
+  for (const sample of [...(payload.samples || [])].reverse()) {
+    const row = document.createElement("div");
+    row.className = "evaluation-row";
+    row.textContent = `예측 ${sample.label} / val ${fmt(sample.valence)} / ar ${fmt(sample.arousal)} / conf ${fmt(sample.confidence)}`;
+    visitorList.appendChild(row);
+  }
+}
+
 async function loadEvaluation() {
   const response = await fetch("/api/evaluation");
   const payload = await response.json();
@@ -310,6 +327,15 @@ async function recordParentMemory(expectedLabel) {
   }
   renderParentMemory(payload);
   renderEvaluation(payload);
+}
+
+async function loadVisitorMemory() {
+  const response = await fetch("/api/visitor-memory");
+  const payload = await response.json();
+  if (!response.ok || !payload.ok) {
+    throw new Error(payload.error || `visitor memory load failed: ${response.status}`);
+  }
+  renderVisitorMemory(payload);
 }
 
 async function runDebugAction(label, action) {
@@ -873,6 +899,12 @@ loadParentMemory().catch((error) => {
     parentSummary.textContent = error.message;
   }
 });
+loadVisitorMemory().catch((error) => {
+  if (visitorSummary) {
+    visitorSummary.textContent = error.message;
+  }
+});
+setInterval(loadVisitorMemory, 3000);
 pollStatus();
 pollLiveStatus();
 if (debugSnapshotButton) {
