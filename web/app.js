@@ -55,6 +55,10 @@ const ledPreviewModel = window.InnerworldLedPreview;
 const evaluationSummary = document.querySelector("#evaluationSummary");
 const evaluationList = document.querySelector("#evaluationList");
 const evaluationButtons = document.querySelectorAll("[data-eval-label]");
+const parentSummary = document.querySelector("#parentSummary");
+const parentList = document.querySelector("#parentList");
+const parentButtons = document.querySelectorAll("[data-parent-label]");
+const parentSpeakerInput = document.querySelector("#parentSpeakerInput");
 
 let pollTimer = null;
 let livePollTimer = null;
@@ -242,6 +246,24 @@ function renderEvaluation(payload) {
   }
 }
 
+function renderParentMemory(payload) {
+  if (!parentSummary || !parentList) {
+    return;
+  }
+  const accuracy = payload.accuracy === null || payload.accuracy === undefined
+    ? "-"
+    : `${Math.round(payload.accuracy * 100)}%`;
+  parentSummary.textContent = `${payload.count || 0} parent samples / accuracy ${accuracy}`;
+  parentList.innerHTML = "";
+  for (const sample of [...(payload.samples || [])].reverse()) {
+    const row = document.createElement("div");
+    row.className = "evaluation-row";
+    row.dataset.correct = sample.correct ? "true" : "false";
+    row.textContent = `${sample.speaker || "team"} / 정답 ${sample.expected_label} / 예측 ${sample.predicted_label} / val ${fmt(sample.valence_live)} / conf ${fmt(sample.ser_confidence)}`;
+    parentList.appendChild(row);
+  }
+}
+
 async function loadEvaluation() {
   const response = await fetch("/api/evaluation");
   const payload = await response.json();
@@ -261,6 +283,32 @@ async function recordEvaluation(expectedLabel) {
   if (!response.ok || !payload.ok) {
     throw new Error(payload.error || `evaluation record failed: ${response.status}`);
   }
+  renderEvaluation(payload);
+}
+
+async function loadParentMemory() {
+  const response = await fetch("/api/parent-memory");
+  const payload = await response.json();
+  if (!response.ok || !payload.ok) {
+    throw new Error(payload.error || `parent memory load failed: ${response.status}`);
+  }
+  renderParentMemory(payload);
+}
+
+async function recordParentMemory(expectedLabel) {
+  const response = await fetch("/api/parent-memory/record", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      expectedLabel,
+      speaker: parentSpeakerInput?.value || "team",
+    }),
+  });
+  const payload = await response.json();
+  if (!response.ok || !payload.ok) {
+    throw new Error(payload.error || `parent memory record failed: ${response.status}`);
+  }
+  renderParentMemory(payload);
   renderEvaluation(payload);
 }
 
@@ -788,6 +836,16 @@ for (const button of evaluationButtons) {
   });
 }
 
+for (const button of parentButtons) {
+  button.addEventListener("click", () => {
+    recordParentMemory(button.dataset.parentLabel).catch((error) => {
+      if (parentSummary) {
+        parentSummary.textContent = error.message;
+      }
+    });
+  });
+}
+
 buildControllerPreview();
 buildArduinoHardwarePreview();
 renderLedPreviewFromState({});
@@ -808,6 +866,11 @@ loadVirtualMicScenarios()
 loadEvaluation().catch((error) => {
   if (evaluationSummary) {
     evaluationSummary.textContent = error.message;
+  }
+});
+loadParentMemory().catch((error) => {
+  if (parentSummary) {
+    parentSummary.textContent = error.message;
   }
 });
 pollStatus();

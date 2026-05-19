@@ -3,6 +3,7 @@ import unittest
 from live_signal import (
     EnvelopeSmoother,
     NoiseFloorTracker,
+    RollingVoiceBaseline,
     SegmentEndpoint,
     SpeakerBleedGate,
     UtteranceValenceTracker,
@@ -67,6 +68,14 @@ class LiveSignalCoreTests(unittest.TestCase):
 
         self.assertEqual(result["valence"], -1.0)
         self.assertEqual(result["arousal"], 1.0)
+
+    def test_rolling_voice_baseline_reports_relative_arousal(self):
+        baseline = RollingVoiceBaseline(rms_baseline=0.02, arousal_baseline=-0.4, speech_learning_rate=0.1)
+
+        result = baseline.update(rms=0.04, arousal_live=0.0, has_signal=True)
+
+        self.assertGreater(result["relative_level"], 1.0)
+        self.assertGreater(result["relative_arousal"], 0.0)
 
 
 class SpeakerBleedGateTests(unittest.TestCase):

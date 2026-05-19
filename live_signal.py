@@ -34,6 +34,46 @@ class EnvelopeSmoother:
         return self.value
 
 
+class RollingVoiceBaseline:
+    """Continuously adapt to the current speaker/environment without identity."""
+
+    def __init__(
+        self,
+        rms_baseline=0.02,
+        arousal_baseline=0.0,
+        speech_learning_rate=0.015,
+        quiet_learning_rate=0.06,
+    ):
+        self.rms_baseline = max(float(rms_baseline), 1e-6)
+        self.arousal_baseline = float(arousal_baseline)
+        self.speech_learning_rate = float(speech_learning_rate)
+        self.quiet_learning_rate = float(quiet_learning_rate)
+
+    def reset(self):
+        self.rms_baseline = 0.02
+        self.arousal_baseline = 0.0
+
+    def update(self, rms, arousal_live, has_signal):
+        rms = max(float(rms), 0.0)
+        arousal_live = _clamp(arousal_live)
+        learning_rate = self.speech_learning_rate if has_signal else self.quiet_learning_rate
+        self.rms_baseline = max(
+            1e-6,
+            self.rms_baseline + (rms - self.rms_baseline) * learning_rate,
+        )
+        self.arousal_baseline = _clamp(
+            self.arousal_baseline + (arousal_live - self.arousal_baseline) * learning_rate
+        )
+        relative_level = rms / self.rms_baseline
+        relative_arousal = _clamp(arousal_live - self.arousal_baseline)
+        return {
+            "rms_baseline": self.rms_baseline,
+            "arousal_baseline": self.arousal_baseline,
+            "relative_level": relative_level,
+            "relative_arousal": relative_arousal,
+        }
+
+
 class SegmentEndpoint:
     def __init__(self, silence_seconds=1.0):
         self.silence_seconds = float(silence_seconds)

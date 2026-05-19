@@ -147,6 +147,24 @@
         <div id="evaluationList" class="evaluation-list"></div>
       </section>
 
+      <section class="evaluation-section" data-testid="parent-training">
+        <div class="evaluation-head">
+          <div>
+            <p class="label">Parent Training Mode</p>
+            <h2>팀원 목소리로 초기 기억 만들기</h2>
+          </div>
+          <p id="parentSummary" class="mono">0 parent samples</p>
+        </div>
+        <div class="evaluation-actions">
+          <input id="parentSpeakerInput" type="text" value="team" aria-label="speaker name">
+          <button type="button" data-parent-label="ang">부모: ang</button>
+          <button type="button" data-parent-label="sad">부모: sad</button>
+          <button type="button" data-parent-label="neu">부모: neu</button>
+          <button type="button" data-parent-label="hap">부모: hap</button>
+        </div>
+        <div id="parentList" class="evaluation-list"></div>
+      </section>
+
       <section class="debug-section" data-testid="debug-console">
         <div class="debug-head">
           <div>
@@ -218,6 +236,6 @@
       </section>
     </main>
     <script src="./led_preview_model.js?v=quadrant-test-preview"></script>
-    <script src="./app.js?v=live-valence"></script>
+    <script src="./app.js?v=parent-training"></script>
   </body>
 </html>

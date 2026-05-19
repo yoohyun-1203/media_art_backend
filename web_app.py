@@ -8,7 +8,7 @@ from pathlib import Path
 
 import audio_io
 import main as backend
-from live_signal import EnvelopeSmoother, UtteranceValenceTracker, compose_led_mood_signal
+from live_signal import EnvelopeSmoother, RollingVoiceBaseline, UtteranceValenceTracker, compose_led_mood_signal
 from local_ser import LocalSerRuntime, build_local_ser_model
 from mood_meter import clamp_mood_value, mood_payload
 from td_bridge_client import (
@@ -26,6 +26,8 @@ HOST = "127.0.0.1"
 PORT = int(os.getenv("WEB_PORT", "8765"))
 ROOT = Path(__file__).resolve().parent
 WEB_ROOT = ROOT / "web"
+MEMORY_DIR = ROOT / "memory"
+PARENT_MEMORY_PATH = MEMORY_DIR / "parent_memory.json"
 DEBUG_OSC_PATTERNS = {
     "red_high": {"label": "red/high", "valence": -0.7, "arousal": 0.7},
     "yellow_high": {"label": "yellow/high", "valence": 0.7, "arousal": 0.7},
@@ -52,6 +54,7 @@ live_valence_tracker = UtteranceValenceTracker(
     switch_min_confidence=0.75,
 )
 td_arousal_smoother = EnvelopeSmoother(value=0.0, attack=0.18, release=0.08)
+voice_baseline = RollingVoiceBaseline()
 
 job_lock = threading.Lock()
 job_state = {
@@ -89,6 +92,7 @@ virtual_mic_state = {
 
 evaluation_lock = threading.Lock()
 evaluation_samples = []
+parent_memory_lock = threading.Lock()
 
 
 def set_job(**updates):
@@ -144,6 +148,57 @@ def record_evaluation_sample(expected_label):
         evaluation_samples.append(sample)
         del evaluation_samples[:-50]
         return sample
+
+
+def load_parent_memory():
+    if not PARENT_MEMORY_PATH.exists():
+        return {"samples": []}
+    try:
+        return json.loads(PARENT_MEMORY_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return {"samples": []}
+
+
+def save_parent_memory(memory):
+    MEMORY_DIR.mkdir(parents=True, exist_ok=True)
+    PARENT_MEMORY_PATH.write_text(
+        json.dumps(memory, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+def record_parent_sample(expected_label, speaker="team"):
+    sample = record_evaluation_sample(expected_label)
+    sample["speaker"] = str(speaker or "team")
+    with parent_memory_lock:
+        memory = load_parent_memory()
+        samples = list(memory.get("samples", []))
+        samples.append(sample)
+        memory = {
+            "version": 1,
+            "updated_at": time.time(),
+            "samples": samples,
+        }
+        save_parent_memory(memory)
+    return sample
+
+
+def parent_memory_summary():
+    with parent_memory_lock:
+        samples = list(load_parent_memory().get("samples", []))
+    correct = sum(1 for sample in samples if sample.get("correct"))
+    by_label = {}
+    for sample in samples:
+        label = sample.get("expected_label", "unknown")
+        by_label[label] = by_label.get(label, 0) + 1
+    return {
+        "path": str(PARENT_MEMORY_PATH),
+        "count": len(samples),
+        "correct": correct,
+        "accuracy": round(correct / len(samples), 3) if samples else None,
+        "byLabel": by_label,
+        "samples": samples[-12:],
+    }
 
 
 def evaluation_summary():
@@ -424,12 +479,22 @@ def smooth_td_arousal(arousal):
     return td_arousal_smoother.update(arousal)
 
 
+def ser_arousal_hint(raw_arousal, relative_arousal):
+    return max(-1.0, min(1.0, (float(raw_arousal) * 0.4) + (float(relative_arousal) * 0.6)))
+
+
 def process_live_audio_chunk(data, overflowed=False, now=None):
     process_start = time.perf_counter()
     timestamp = time.time() if now is None else now
     features = backend.compute_live_audio_features(data, rate=backend.RATE)
     arousal_confidence = float(features.get("arousal_confidence", 0.0))
-    ser_result = local_ser_runtime.process(data, arousal_hint=features["arousal_live"])
+    baseline = voice_baseline.update(
+        rms=features.get("rms", 0.0),
+        arousal_live=features["arousal_live"],
+        has_signal=arousal_confidence > 0.0,
+    )
+    ser_hint = ser_arousal_hint(features["arousal_live"], baseline["relative_arousal"])
+    ser_result = local_ser_runtime.process(data, arousal_hint=ser_hint)
     ser_confidence = float(ser_result.get("confidence", 0.0))
     valence_state = live_valence_tracker.update(
         candidate_valence=float(ser_result.get("valence", 0.0)),
@@ -454,11 +519,15 @@ def process_live_audio_chunk(data, overflowed=False, now=None):
         "valence_target": signal["valence"],
         "valence_confidence": ser_confidence,
         "ser_arousal": float(ser_result.get("arousal", features["arousal_live"])),
+        "ser_arousal_hint": ser_hint,
         "ser_confidence": ser_confidence,
         "ser_label": str(ser_result.get("label", "unknown")),
         "ser_backend": backend.LOCAL_SER_BACKEND,
         "valence_segment_event": valence_state["event"],
         "valence_committed": valence_state["committed"],
+        "voice_baseline_rms": baseline["rms_baseline"],
+        "voice_relative_level": baseline["relative_level"],
+        "voice_relative_arousal": baseline["relative_arousal"],
         "serial_prefix": signal.get("serial_prefix", "v"),
     }
 
@@ -468,10 +537,17 @@ def process_dual_live_audio_chunk(left_data, right_data, overflowed=False, now=N
     timestamp = time.time() if now is None else now
     features = backend.compute_dual_live_audio_features(left_data, right_data, rate=backend.RATE)
     arousal_confidence = float(features.get("arousal_confidence", 0.0))
+    primary_rms = max(float(features.get("left_rms", 0.0)), float(features.get("right_rms", 0.0)))
+    baseline = voice_baseline.update(
+        rms=primary_rms,
+        arousal_live=features["arousal_live"],
+        has_signal=arousal_confidence > 0.0,
+    )
+    ser_hint = ser_arousal_hint(features["arousal_live"], baseline["relative_arousal"])
     primary_data = left_data
     if float(features["right_arousal_live"]) > float(features["left_arousal_live"]):
         primary_data = right_data
-    ser_result = local_ser_runtime.process(primary_data, arousal_hint=features["arousal_live"])
+    ser_result = local_ser_runtime.process(primary_data, arousal_hint=ser_hint)
     ser_confidence = float(ser_result.get("confidence", 0.0))
     valence_state = live_valence_tracker.update(
         candidate_valence=float(ser_result.get("valence", 0.0)),
@@ -506,11 +582,15 @@ def process_dual_live_audio_chunk(left_data, right_data, overflowed=False, now=N
         "valence_target": signal["valence"],
         "valence_confidence": ser_confidence,
         "ser_arousal": float(ser_result.get("arousal", features["arousal_live"])),
+        "ser_arousal_hint": ser_hint,
         "ser_confidence": ser_confidence,
         "ser_label": str(ser_result.get("label", "unknown")),
         "ser_backend": backend.LOCAL_SER_BACKEND,
         "valence_segment_event": valence_state["event"],
         "valence_committed": valence_state["committed"],
+        "voice_baseline_rms": baseline["rms_baseline"],
+        "voice_relative_level": baseline["relative_level"],
+        "voice_relative_arousal": baseline["relative_arousal"],
         "serial_prefix": signal.get("serial_prefix", "v"),
         "live_input_mode": "dual_devices",
         "left_device": backend.LEFT_DEVICE,
@@ -614,6 +694,7 @@ def start_live():
         return False, state
     live_valence_tracker.reset()
     td_arousal_smoother.value = 0.0
+    voice_baseline.reset()
     live_stop_event.clear()
     live_thread = threading.Thread(target=live_worker, daemon=True)
     live_thread.start()
@@ -676,6 +757,9 @@ class Handler(SimpleHTTPRequestHandler):
         if self.path == "/api/evaluation":
             self.send_json({"ok": True, **evaluation_summary()})
             return
+        if self.path == "/api/parent-memory":
+            self.send_json({"ok": True, **parent_memory_summary()})
+            return
         if self.path == "/api/health":
             self.send_json({
                 "ok": True,
@@ -717,6 +801,18 @@ class Handler(SimpleHTTPRequestHandler):
                 body = self.read_json()
                 sample = record_evaluation_sample(body.get("expectedLabel"))
                 self.send_json({"ok": True, "sample": sample, **evaluation_summary()})
+            except ValueError as exc:
+                self.send_json({"ok": False, "error": str(exc)}, status=400)
+            return
+
+        if self.path == "/api/parent-memory/record":
+            try:
+                body = self.read_json()
+                sample = record_parent_sample(
+                    body.get("expectedLabel"),
+                    speaker=body.get("speaker", "team"),
+                )
+                self.send_json({"ok": True, "sample": sample, **parent_memory_summary()})
             except ValueError as exc:
                 self.send_json({"ok": False, "error": str(exc)}, status=400)
             return

@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "updated_at": 1779201674.060139,
+  "samples": [
+    {
+      "timestamp": 1779201674.060135,
+      "expected_label": "ang",
+      "predicted_label": "ang",
+      "valence_live": -0.8,
+      "ser_confidence": 0.9,
+      "arousal_live": 0.5,
+      "correct": true,
+      "speaker": "yoohyun"
+    }
+  ]
+}
