@@ -1,9 +1,52 @@
 {
   "version": 1,
-  "updated_at": null,
+  "updated_at": 1779204954.034127,
   "mood": {
-    "valence": 0.0,
-    "arousal": 0.0
+    "valence": 0.00655339928944077,
+    "arousal": -0.0036669187508933197
   },
-  "samples": []
+  "samples": [
+    {
+      "timestamp": 1779204938.714613,
+      "label": "hap",
+      "valence": 0.8,
+      "arousal": -0.33619534180781796,
+      "confidence": 0.6404961943626404
+    },
+    {
+      "timestamp": 1779204951.210125,
+      "label": "hap",
+      "valence": 0.8,
+      "arousal": 0.0013936146854924836,
+      "confidence": 0.6055427193641663
+    },
+    {
+      "timestamp": 1779204951.9168682,
+      "label": "hap",
+      "valence": 0.8,
+      "arousal": -0.1794183782043145,
+      "confidence": 0.6932625770568848
+    },
+    {
+      "timestamp": 1779204952.626698,
+      "label": "neu",
+      "valence": 0.0,
+      "arousal": -0.29224474421019764,
+      "confidence": 0.7016510963439941
+    },
+    {
+      "timestamp": 1779204953.329165,
+      "label": "sad",
+      "valence": -0.7,
+      "arousal": -0.05366084200185317,
+      "confidence": 0.9968773126602173
+    },
+    {
+      "timestamp": 1779204954.034127,
+      "label": "neu",
+      "valence": 0.0,
+      "arousal": 0.15053875603648326,
+      "confidence": 0.8414304256439209
+    }
+  ]
 }

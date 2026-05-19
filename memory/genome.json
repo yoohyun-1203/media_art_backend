@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "arousal_attack": 0.18,
+  "arousal_release": 0.08,
+  "visitor_bias_strength": 0.18,
+  "valence_memory_attack": 0.22,
+  "valence_memory_release": 0.08
+}

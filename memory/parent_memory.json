@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_at": 1779203331.838155,
+  "updated_at": 1779204951.2322922,
   "samples": [
     {
       "timestamp": 1779203317.646903,
@@ -30,6 +30,16 @@
       "ser_confidence": 0.9802320003509521,
       "arousal_live": -0.3517722749153982,
       "correct": false,
+      "speaker": "team"
+    },
+    {
+      "timestamp": 1779204951.2321699,
+      "expected_label": "neu",
+      "predicted_label": "neu",
+      "valence_live": 0.2238871514608779,
+      "ser_confidence": 0.8350344896316528,
+      "arousal_live": -0.4568944616028582,
+      "correct": true,
       "speaker": "team"
     }
   ]
