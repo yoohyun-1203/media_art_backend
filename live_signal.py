@@ -73,6 +73,8 @@ class UtteranceValenceTracker:
         min_hold_seconds=3.0,
         switch_min_candidates=5,
         switch_min_confidence=0.75,
+        mood_attack=0.22,
+        mood_release=0.08,
     ):
         self.endpoint = SegmentEndpoint(silence_seconds=silence_seconds)
         self.max_utterance_seconds = float(max_utterance_seconds)
@@ -81,8 +83,11 @@ class UtteranceValenceTracker:
         self.min_hold_seconds = float(min_hold_seconds)
         self.switch_min_candidates = int(switch_min_candidates)
         self.switch_min_confidence = float(switch_min_confidence)
+        self.mood_attack = float(mood_attack)
+        self.mood_release = float(mood_release)
         self.committed_valence = 0.0
         self.committed_confidence = 0.0
+        self.mood_score = 0.0
         self.last_committed_at = None
         self._candidates = []
         self._utterance_started_at = None
@@ -91,6 +96,7 @@ class UtteranceValenceTracker:
         self.endpoint = SegmentEndpoint(silence_seconds=self.endpoint.silence_seconds)
         self.committed_valence = 0.0
         self.committed_confidence = 0.0
+        self.mood_score = 0.0
         self.last_committed_at = None
         self._candidates = []
         self._utterance_started_at = None
@@ -115,7 +121,9 @@ class UtteranceValenceTracker:
         if not self._can_replace_committed(candidate_valence, candidate_confidence, now):
             self._candidates = []
             return False
-        self.committed_valence = candidate_valence
+        coefficient = self.mood_attack if abs(candidate_valence) > abs(self.mood_score) else self.mood_release
+        self.mood_score = self.mood_score + (candidate_valence - self.mood_score) * coefficient
+        self.committed_valence = self.mood_score
         self.committed_confidence = candidate_confidence
         self.last_committed_at = float(now)
         self._candidates = []
@@ -178,6 +186,7 @@ class UtteranceValenceTracker:
         return {
             "valence": self.committed_valence,
             "confidence": self.committed_confidence,
+            "mood_score": self.mood_score,
             "event": event,
             "committed": committed,
             "candidate_count": len(self._candidates),

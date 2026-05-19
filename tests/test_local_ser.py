@@ -14,6 +14,7 @@ from local_ser import (
     LocalSerRuntime,
     RollingSerWindow,
     build_local_ser_model,
+    valence_for_label,
 )
 
 
@@ -196,6 +197,14 @@ class HuggingFaceAudioSerModelTests(unittest.TestCase):
 
         self.assertEqual(result["label"], "ang")
         self.assertEqual(result["valence"], -0.8)
+
+    def test_sad_label_is_weaker_negative_when_arousal_is_high(self):
+        self.assertEqual(valence_for_label("sad", arousal_hint=0.0), -0.7)
+        self.assertEqual(valence_for_label("sad", arousal_hint=0.6), -0.2)
+
+    def test_quiet_voice_softens_sad_and_tilts_neutral_positive(self):
+        self.assertEqual(valence_for_label("sad", arousal_hint=-0.3), -0.15)
+        self.assertEqual(valence_for_label("neu", arousal_hint=-0.3), 0.12)
 
     def test_predict_passes_actual_input_rate_for_pipeline_resampling(self):
         classifier = mock.Mock(return_value=[[{"label": "sadness", "score": 0.7}]])

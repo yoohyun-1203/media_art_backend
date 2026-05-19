@@ -48,6 +48,25 @@ def normalize_ser_prediction(prediction, arousal_hint: float = 0.0):
     }
 
 
+def valence_for_label(label, arousal_hint=0.0, label_valence=None):
+    mapping = {**DEFAULT_LABEL_VALENCE, **(label_valence or {})}
+    normalized_label = str(label or "unknown").strip().lower()
+    valence = mapping.get(normalized_label, 0.0)
+
+    # In this live Korean voice setup, quiet/low voices can make positive
+    # utterances collapse into sad/neutral. Keep quiet voice color gentler.
+    if float(arousal_hint) < -0.15:
+        if normalized_label in {"sad", "sadness"}:
+            return -0.15
+        if normalized_label in {"neu", "neutral"}:
+            return 0.12
+
+    # Bright/high-energy happy speech is also sometimes misread as "sad".
+    if normalized_label in {"sad", "sadness"} and float(arousal_hint) > 0.25:
+        return max(valence, -0.2)
+    return valence
+
+
 class RollingSerWindow:
     def __init__(self, rate: int = 16000, seconds: float = 1.0):
         self.rate = rate
@@ -153,7 +172,7 @@ class HuggingFaceAudioSerModel:
         top = raw[0] if raw else {}
         label = str(top.get("label", "unknown"))
         return {
-            "valence": self.label_valence.get(label.strip().lower(), 0.0),
+            "valence": valence_for_label(label, arousal_hint=arousal_hint, label_valence=self.label_valence),
             "arousal": float(arousal_hint),
             "confidence": float(top.get("score", 0.0)),
             "label": label,

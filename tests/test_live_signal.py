@@ -123,7 +123,7 @@ class UtteranceValenceTrackerTests(unittest.TestCase):
         self.assertEqual(first["valence"], 0.0)
         self.assertEqual(second["valence"], 0.0)
         self.assertTrue(end["committed"])
-        self.assertAlmostEqual(end["valence"], 0.1)
+        self.assertAlmostEqual(end["valence"], 0.022)
 
     def test_long_continuous_speech_refreshes_without_word_level_updates(self):
         tracker = UtteranceValenceTracker(silence_seconds=0.9, max_utterance_seconds=4.0)
@@ -134,7 +134,7 @@ class UtteranceValenceTrackerTests(unittest.TestCase):
 
         self.assertFalse(before_refresh["committed"])
         self.assertTrue(refresh["committed"])
-        self.assertAlmostEqual(refresh["valence"], 0.8)
+        self.assertAlmostEqual(refresh["valence"], 0.176)
 
     def test_early_commits_after_three_stable_candidates(self):
         tracker = UtteranceValenceTracker(
@@ -199,6 +199,24 @@ class UtteranceValenceTrackerTests(unittest.TestCase):
 
         self.assertTrue(switched["committed"])
         self.assertLess(switched["valence"], 0.0)
+
+    def test_mood_score_moves_gradually_toward_repeated_same_direction(self):
+        tracker = UtteranceValenceTracker(
+            silence_seconds=0.5,
+            early_commit_min_candidates=3,
+            early_commit_min_confidence=0.6,
+            mood_attack=0.22,
+        )
+
+        tracker.update(0.8, 0.9, has_signal=True, now=10.0)
+        tracker.update(0.8, 0.9, has_signal=True, now=10.1)
+        first = tracker.update(0.8, 0.9, has_signal=True, now=10.2)
+        tracker.update(0.8, 0.9, has_signal=True, now=14.3)
+        second = tracker.update(0.0, 0.0, has_signal=False, now=14.9)
+
+        self.assertGreater(first["valence"], 0.0)
+        self.assertGreater(second["valence"], first["valence"])
+        self.assertLess(second["valence"], 0.8)
 
 
 if __name__ == "__main__":
