@@ -61,6 +61,7 @@ const parentButtons = document.querySelectorAll("[data-parent-label]");
 const parentSpeakerInput = document.querySelector("#parentSpeakerInput");
 const visitorSummary = document.querySelector("#visitorSummary");
 const visitorList = document.querySelector("#visitorList");
+const genomeSummary = document.querySelector("#genomeSummary");
 
 let pollTimer = null;
 let livePollTimer = null;
@@ -336,6 +337,23 @@ async function loadVisitorMemory() {
     throw new Error(payload.error || `visitor memory load failed: ${response.status}`);
   }
   renderVisitorMemory(payload);
+}
+
+function renderGenome(payload) {
+  if (!genomeSummary) {
+    return;
+  }
+  const genome = payload.genome || {};
+  genomeSummary.textContent = `ar atk ${fmt(genome.arousal_attack)} / ar rel ${fmt(genome.arousal_release)} / visitor bias ${fmt(genome.visitor_bias_strength)}`;
+}
+
+async function loadGenome() {
+  const response = await fetch("/api/genome");
+  const payload = await response.json();
+  if (!response.ok || !payload.ok) {
+    throw new Error(payload.error || `genome load failed: ${response.status}`);
+  }
+  renderGenome(payload);
 }
 
 async function runDebugAction(label, action) {
@@ -904,7 +922,15 @@ loadVisitorMemory().catch((error) => {
     visitorSummary.textContent = error.message;
   }
 });
-setInterval(loadVisitorMemory, 3000);
+loadGenome().catch((error) => {
+  if (genomeSummary) {
+    genomeSummary.textContent = error.message;
+  }
+});
+setInterval(() => {
+  loadVisitorMemory();
+  loadGenome();
+}, 3000);
 pollStatus();
 pollLiveStatus();
 if (debugSnapshotButton) {

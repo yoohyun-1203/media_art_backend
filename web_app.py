@@ -29,6 +29,15 @@ WEB_ROOT = ROOT / "web"
 MEMORY_DIR = ROOT / "memory"
 PARENT_MEMORY_PATH = MEMORY_DIR / "parent_memory.json"
 VISITOR_MEMORY_PATH = MEMORY_DIR / "visitor_memory.json"
+GENOME_PATH = MEMORY_DIR / "genome.json"
+DEFAULT_GENOME = {
+    "version": 1,
+    "arousal_attack": 0.18,
+    "arousal_release": 0.08,
+    "visitor_bias_strength": 0.18,
+    "valence_memory_attack": 0.22,
+    "valence_memory_release": 0.08,
+}
 DEBUG_OSC_PATTERNS = {
     "red_high": {"label": "red/high", "valence": -0.7, "arousal": 0.7},
     "yellow_high": {"label": "yellow/high", "valence": 0.7, "arousal": 0.7},
@@ -97,6 +106,7 @@ parent_memory_lock = threading.Lock()
 visitor_memory_lock = threading.Lock()
 visitor_valence_smoother = EnvelopeSmoother(value=0.0, attack=0.025, release=0.012)
 last_visitor_memory_at = 0.0
+genome_lock = threading.Lock()
 
 
 def set_job(**updates):
@@ -186,6 +196,45 @@ def save_visitor_memory(memory):
         json.dumps(memory, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+
+
+def load_genome():
+    if not GENOME_PATH.exists():
+        return dict(DEFAULT_GENOME)
+    try:
+        data = json.loads(GENOME_PATH.read_text(encoding="utf-8"))
+        genome = dict(DEFAULT_GENOME)
+        genome.update({key: data.get(key, value) for key, value in DEFAULT_GENOME.items()})
+        return genome
+    except Exception:
+        return dict(DEFAULT_GENOME)
+
+
+def save_genome(genome):
+    MEMORY_DIR.mkdir(parents=True, exist_ok=True)
+    GENOME_PATH.write_text(json.dumps(genome, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def evolve_genome_from_visitor_memory(memory):
+    with genome_lock:
+        genome = load_genome()
+        samples = list((memory or {}).get("samples", []))[-80:]
+        if len(samples) < 8:
+            save_genome(genome)
+            return genome
+        valences = [float(sample.get("valence", 0.0)) for sample in samples]
+        arousals = [float(sample.get("arousal", 0.0)) for sample in samples]
+        avg_abs_valence = sum(abs(value) for value in valences) / len(valences)
+        avg_abs_arousal = sum(abs(value) for value in arousals) / len(arousals)
+        # Tiny bounded "evolution": visitor history nudges personality, never jumps.
+        target_bias_strength = 0.12 + min(0.16, avg_abs_valence * 0.12)
+        target_attack = 0.12 + min(0.12, avg_abs_arousal * 0.08)
+        genome["visitor_bias_strength"] = max(0.08, min(0.28, genome["visitor_bias_strength"] + (target_bias_strength - genome["visitor_bias_strength"]) * 0.03))
+        genome["arousal_attack"] = max(0.08, min(0.28, genome["arousal_attack"] + (target_attack - genome["arousal_attack"]) * 0.02))
+        genome["arousal_release"] = max(0.04, min(0.14, genome["arousal_release"] + ((genome["arousal_attack"] * 0.45) - genome["arousal_release"]) * 0.02))
+        genome["updated_at"] = time.time()
+        save_genome(genome)
+        return genome
 
 
 def record_parent_sample(expected_label, speaker="team"):
@@ -303,6 +352,7 @@ def update_visitor_memory(ser_result, arousal_live, arousal_confidence=0.0, now=
         }
         save_visitor_memory(memory)
         last_visitor_memory_at = now
+    evolve_genome_from_visitor_memory(memory)
     return memory["mood"]
 
 
@@ -324,8 +374,13 @@ def visitor_memory_summary():
 
 
 def visitor_valence_bias(visitor_mood, max_strength=0.18):
+    max_strength = float(load_genome().get("visitor_bias_strength", max_strength))
     target = float((visitor_mood or {}).get("valence", 0.0))
     return visitor_valence_smoother.update(max(-max_strength, min(max_strength, target * max_strength)))
+
+
+def genome_summary():
+    return {"path": str(GENOME_PATH), "genome": load_genome()}
 
 
 def evaluation_summary():
@@ -603,6 +658,9 @@ def send_composed_live_signal(
 
 
 def smooth_td_arousal(arousal):
+    genome = load_genome()
+    td_arousal_smoother.attack = float(genome.get("arousal_attack", td_arousal_smoother.attack))
+    td_arousal_smoother.release = float(genome.get("arousal_release", td_arousal_smoother.release))
     return td_arousal_smoother.update(arousal)
 
 
@@ -913,6 +971,9 @@ class Handler(SimpleHTTPRequestHandler):
             return
         if self.path == "/api/visitor-memory":
             self.send_json({"ok": True, **visitor_memory_summary()})
+            return
+        if self.path == "/api/genome":
+            self.send_json({"ok": True, **genome_summary()})
             return
         if self.path == "/api/health":
             self.send_json({

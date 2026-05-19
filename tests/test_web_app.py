@@ -322,12 +322,16 @@ class EvaluationTests(unittest.TestCase):
             web_app.evaluation_samples.clear()
         self._old_parent_memory_path = web_app.PARENT_MEMORY_PATH
         self._old_visitor_memory_path = web_app.VISITOR_MEMORY_PATH
+        self._old_genome_path = web_app.GENOME_PATH
         web_app.PARENT_MEMORY_PATH = web_app.ROOT / "memory" / ".test_parent_memory.json"
         web_app.VISITOR_MEMORY_PATH = web_app.ROOT / "memory" / ".test_visitor_memory.json"
+        web_app.GENOME_PATH = web_app.ROOT / "memory" / ".test_genome.json"
         if web_app.PARENT_MEMORY_PATH.exists():
             web_app.PARENT_MEMORY_PATH.unlink()
         if web_app.VISITOR_MEMORY_PATH.exists():
             web_app.VISITOR_MEMORY_PATH.unlink()
+        if web_app.GENOME_PATH.exists():
+            web_app.GENOME_PATH.unlink()
         web_app.visitor_valence_smoother.value = 0.0
         web_app.last_visitor_memory_at = 0.0
 
@@ -336,8 +340,11 @@ class EvaluationTests(unittest.TestCase):
             web_app.PARENT_MEMORY_PATH.unlink()
         if web_app.VISITOR_MEMORY_PATH.exists():
             web_app.VISITOR_MEMORY_PATH.unlink()
+        if web_app.GENOME_PATH.exists():
+            web_app.GENOME_PATH.unlink()
         web_app.PARENT_MEMORY_PATH = self._old_parent_memory_path
         web_app.VISITOR_MEMORY_PATH = self._old_visitor_memory_path
+        web_app.GENOME_PATH = self._old_genome_path
 
     def test_record_evaluation_sample_compares_latest_prediction(self):
         with mock.patch.object(web_app, "get_live", return_value={"latest": {
@@ -434,6 +441,20 @@ class EvaluationTests(unittest.TestCase):
         summary = web_app.visitor_memory_summary()
 
         self.assertEqual(summary["count"], 1)
+
+    def test_evolve_genome_from_visitor_memory_changes_slowly(self):
+        memory = {
+            "samples": [
+                {"valence": 0.8, "arousal": 0.7}
+                for _index in range(12)
+            ]
+        }
+
+        genome = web_app.evolve_genome_from_visitor_memory(memory)
+
+        self.assertGreater(genome["visitor_bias_strength"], web_app.DEFAULT_GENOME["visitor_bias_strength"] - 0.01)
+        self.assertLessEqual(genome["visitor_bias_strength"], 0.28)
+        self.assertTrue(web_app.GENOME_PATH.exists())
 
 
 if __name__ == "__main__":
